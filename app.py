@@ -267,6 +267,112 @@ def get_weather(city="Cordoba,Argentina"):
         print(f"Error obteniendo clima: {e}")
         return "No pude obtener el clima en este momento."
 
+# ==================== MEDICAMENTOS ====================
+
+MEDS_FILE = os.path.join(DATA_DIR, "medications.json")
+
+def load_medications():
+    """Carga los medicamentos desde el archivo JSON"""
+    if os.path.exists(MEDS_FILE):
+        try:
+            with open(MEDS_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_medications(meds):
+    """Guarda los medicamentos en el archivo JSON"""
+    with open(MEDS_FILE, "w") as f:
+        json.dump(meds, f, indent=2, ensure_ascii=False)
+
+def add_medication(user_id, med_name):
+    """Agrega un medicamento para un usuario"""
+    meds = load_medications()
+    if user_id not in meds:
+        meds[user_id] = {"medications": [], "log": []}
+
+    if med_name not in meds[user_id]["medications"]:
+        meds[user_id]["medications"].append(med_name)
+        save_medications(meds)
+        return True
+    return False
+
+def remove_medication(user_id, med_name):
+    """Elimina un medicamento"""
+    meds = load_medications()
+    if user_id in meds and med_name in meds[user_id]["medications"]:
+        meds[user_id]["medications"].remove(med_name)
+        save_medications(meds)
+        return True
+    return False
+
+def get_medications(user_id):
+    """Obtiene los medicamentos de un usuario"""
+    meds = load_medications()
+    if user_id in meds:
+        return meds[user_id].get("medications", [])
+    return []
+
+def log_medication_taken(user_id, period):
+    """Registra que se tomaron los medicamentos"""
+    meds = load_medications()
+    if user_id not in meds:
+        meds[user_id] = {"medications": [], "log": []}
+
+    today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+    log_entry = {"date": today, "period": period, "taken": True}
+    meds[user_id]["log"].append(log_entry)
+
+    # Mantener solo los últimos 60 días de log
+    meds[user_id]["log"] = meds[user_id]["log"][-120:]
+    save_medications(meds)
+
+def check_medication_taken_today(user_id, period):
+    """Verifica si ya se registró la toma de medicamentos hoy"""
+    meds = load_medications()
+    if user_id not in meds:
+        return False
+
+    today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+    for entry in meds[user_id].get("log", []):
+        if entry.get("date") == today and entry.get("period") == period:
+            return True
+    return False
+
+def format_medications(user_id):
+    """Formatea la lista de medicamentos"""
+    meds = get_medications(user_id)
+    if not meds:
+        return "💊 No tienes medicamentos registrados."
+
+    result = "💊 *Tus medicamentos:*\n"
+    for i, med in enumerate(meds, 1):
+        result += f"  {i}. {med}\n"
+    return result
+
+def send_medication_reminder(period):
+    """Envía recordatorio de medicamentos a todos los usuarios"""
+    print(f"[{datetime.now()}] Enviando recordatorio de medicamentos ({period})...")
+
+    meds = load_medications()
+
+    for user_id in meds:
+        if meds[user_id].get("medications"):
+            # Verificar si ya tomó los medicamentos
+            if not check_medication_taken_today(user_id, period):
+                med_list = ", ".join(meds[user_id]["medications"])
+                if period == "mañana":
+                    message = f"💊 *Recordatorio de medicamentos (mañana)*\n\n¿Ya tomaste tus medicamentos?\n\n📋 {med_list}\n\nResponde 'tomé mis medicamentos' o 'ya tomé' cuando los hayas tomado."
+                else:
+                    message = f"💊 *Recordatorio de medicamentos (noche)*\n\n¿Ya tomaste tus medicamentos de la noche?\n\n📋 {med_list}\n\nResponde 'tomé mis medicamentos' o 'ya tomé' cuando los hayas tomado."
+
+                try:
+                    send_whatsapp_message(user_id, message)
+                    print(f"Recordatorio de medicamentos enviado a {user_id}")
+                except Exception as e:
+                    print(f"Error enviando recordatorio a {user_id}: {e}")
+
 # ==================== DÓLAR ====================
 
 def get_dolar():
@@ -720,6 +826,18 @@ Para ver bailes de CUARTETO:
 Para ver noticias de CINE/STREAMING:
 [CINE][/CINE]
 
+Para agregar MEDICAMENTO:
+[MED_AGREGAR]<nombre del medicamento>[/MED_AGREGAR]
+
+Para eliminar MEDICAMENTO:
+[MED_ELIMINAR]<nombre del medicamento>[/MED_ELIMINAR]
+
+Para listar MEDICAMENTOS:
+[MED_LISTAR][/MED_LISTAR]
+
+Para registrar que TOMÓ los medicamentos:
+[MED_TOMADO]<periodo: mañana o noche>[/MED_TOMADO]
+
 INSTRUCCIONES:
 - Responde de forma breve y amable
 - Cuando el usuario pida algo, ejecuta la acción directamente sin pedir confirmación
@@ -736,6 +854,10 @@ INSTRUCCIONES:
 - Si dice "fútbol" o "noticias de boca/inter miami", muestra noticias de fútbol
 - Si dice "cuarteto", "bailes" o "qué bailes hay en la semana", muestra info de cuarteto
 - Si dice "cine", "películas", "estrenos", "netflix" o "streaming", muestra info de cine/streaming
+- Si dice "agregar medicamento: X" o "tomo X", agrega el medicamento
+- Si dice "mis medicamentos" o "qué medicamentos tomo", muestra la lista
+- Si dice "tomé mis medicamentos", "ya tomé" o "medicamentos tomados", registra que los tomó (usa "mañana" si es antes de las 14:00, "noche" si es después)
+- Si dice "eliminar medicamento X", elimina el medicamento
 
 Hoy es: {today}
 """
@@ -998,6 +1120,46 @@ def process_actions(response_text, user_id):
     if "[CINE][/CINE]" in result:
         result = result.replace("[CINE][/CINE]", "")
         result += f"\n\n{get_entertainment_news()}"
+
+    # Procesar agregar medicamento
+    med_add_match = re.search(r"\[MED_AGREGAR\](.*?)\[/MED_AGREGAR\]", result)
+    if med_add_match:
+        med_name = med_add_match.group(1).strip()
+        if add_medication(user_id, med_name):
+            result = re.sub(r"\[MED_AGREGAR\].*?\[/MED_AGREGAR\]", "", result)
+            result += f"\n\n✅ Medicamento agregado: {med_name}"
+        else:
+            result = re.sub(r"\[MED_AGREGAR\].*?\[/MED_AGREGAR\]", "", result)
+            result += f"\n\n⚠️ El medicamento '{med_name}' ya está en tu lista."
+
+    # Procesar eliminar medicamento
+    med_del_match = re.search(r"\[MED_ELIMINAR\](.*?)\[/MED_ELIMINAR\]", result)
+    if med_del_match:
+        med_name = med_del_match.group(1).strip()
+        if remove_medication(user_id, med_name):
+            result = re.sub(r"\[MED_ELIMINAR\].*?\[/MED_ELIMINAR\]", "", result)
+            result += f"\n\n✅ Medicamento eliminado: {med_name}"
+        else:
+            result = re.sub(r"\[MED_ELIMINAR\].*?\[/MED_ELIMINAR\]", "", result)
+            result += f"\n\n❌ No encontré el medicamento '{med_name}' en tu lista."
+
+    # Procesar listar medicamentos
+    if "[MED_LISTAR][/MED_LISTAR]" in result:
+        result = result.replace("[MED_LISTAR][/MED_LISTAR]", "")
+        result += f"\n\n{format_medications(user_id)}"
+
+    # Procesar medicamentos tomados
+    med_taken_match = re.search(r"\[MED_TOMADO\](.*?)\[/MED_TOMADO\]", result)
+    if med_taken_match:
+        period = med_taken_match.group(1).strip().lower()
+        if period not in ["mañana", "noche"]:
+            # Determinar automáticamente según la hora
+            hour = datetime.now(TIMEZONE).hour
+            period = "mañana" if hour < 14 else "noche"
+
+        log_medication_taken(user_id, period)
+        result = re.sub(r"\[MED_TOMADO\].*?\[/MED_TOMADO\]", "", result)
+        result += f"\n\n✅ Registrado: medicamentos de la {period} tomados. ¡Bien hecho! 💪"
 
     return result.strip()
 
@@ -1272,6 +1434,10 @@ scheduler = BackgroundScheduler(timezone=TIMEZONE)
 scheduler.add_job(check_and_send_reminders, "interval", minutes=5)
 # Resumen matutino a las 8:00 AM
 scheduler.add_job(send_morning_summary, "cron", hour=8, minute=45)
+# Recordatorio de medicamentos a las 10:00 AM
+scheduler.add_job(lambda: send_medication_reminder("mañana"), "cron", hour=10, minute=0)
+# Recordatorio de medicamentos a las 9:00 PM
+scheduler.add_job(lambda: send_medication_reminder("noche"), "cron", hour=21, minute=0)
 scheduler.start()
 
 if __name__ == "__main__":
