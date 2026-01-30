@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 import anthropic
 from twilio.rest import Client
 from twilio.twiml.messaging_response import MessagingResponse
-import whisper
+# import whisper  # Deshabilitado para deploy en la nube
 import caldav
 from icalendar import Calendar, Event
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -57,14 +57,9 @@ ICLOUD_EMAIL = get_env_var("ICLOUD_EMAIL")
 ICLOUD_APP_PASSWORD = get_env_var("ICLOUD_APP_PASSWORD")
 CALDAV_URL = "https://caldav.icloud.com"
 
-# Cargar modelo de Whisper (opcional para deploy en la nube)
+# Whisper deshabilitado para deploy en la nube (muy pesado)
 whisper_model = None
-try:
-    print("Cargando modelo de Whisper...")
-    whisper_model = whisper.load_model("base")
-    print("Modelo cargado.")
-except Exception as e:
-    print(f"Whisper no disponible: {e}. Los audios no se transcribirán.")
+print("Whisper deshabilitado - los audios no se transcribirán en la nube.")
 
 # Historial de conversaciones por usuario
 conversations = {}
