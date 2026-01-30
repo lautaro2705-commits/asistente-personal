@@ -1072,7 +1072,12 @@ def transcribe_audio(audio_url):
         response = requests.get(audio_url, auth=auth)
         print(f"Audio descargado: {len(response.content)} bytes, status: {response.status_code}")
 
-        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as f:
+        if response.status_code != 200:
+            print(f"Error descargando audio: {response.status_code}")
+            return None
+
+        # Guardar con extensión .mp3 que OpenAI maneja mejor
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
             f.write(response.content)
             temp_path = f.name
 
@@ -1086,20 +1091,27 @@ def transcribe_audio(audio_url):
                     "Authorization": f"Bearer {OPENAI_API_KEY}"
                 },
                 files={
-                    "file": ("audio.ogg", audio_file, "audio/ogg")
+                    "file": ("audio.mp3", audio_file)
                 },
                 data={
                     "model": "whisper-1",
                     "language": "es"
-                }
+                },
+                timeout=30
             )
 
         os.unlink(temp_path)
 
+        print(f"Respuesta de OpenAI: {transcription_response.status_code}")
+
         if transcription_response.status_code == 200:
-            text = transcription_response.json().get("text", "")
+            text = transcription_response.json().get("text", "").strip()
             print(f"Transcripción completada: {text}")
-            return text
+            if text:
+                return text
+            else:
+                print("Transcripción vacía")
+                return None
         else:
             print(f"Error en API de OpenAI: {transcription_response.status_code} - {transcription_response.text}")
             return None
