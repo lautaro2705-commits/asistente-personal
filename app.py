@@ -1660,14 +1660,73 @@ def check_and_send_reminders():
                 print(f"Recordatorio enviado a {user_number}: {title}")
 
 
+def is_new_user(user_id):
+    """Verifica si es un usuario nuevo (sin conversaciones previas)"""
+    conversation = get_conversation(user_id)
+    return len(conversation) == 0
+
+def get_welcome_message():
+    """Mensaje de bienvenida para usuarios nuevos"""
+    return """¡Hola! 👋 Soy tu *Asistente Personal*.
+
+Estoy acá para ayudarte a organizar tu día a día. Esto es lo que puedo hacer:
+
+📋 *TAREAS*
+• "agregar tarea: comprar leche"
+• "mis tareas"
+• "completar tarea 1"
+
+📝 *NOTAS*
+• "guardar nota: cumple de mamá 15/3"
+• "mis notas"
+
+💰 *GASTOS*
+• "gasté 5000 en supermercado"
+• "mis gastos"
+• "análisis de gastos"
+
+🛒 *LISTA DE COMPRAS*
+• "agregar a compras: pan, leche"
+• "lista de compras"
+• "compré el 1"
+
+⏰ *RECORDATORIOS*
+• "recordame en 2 horas sacar la ropa"
+• "recordame mañana a las 10 llamar al médico"
+
+💊 *MEDICAMENTOS*
+• "tomo ibuprofeno"
+• "mis medicamentos"
+• "ya tomé mis medicamentos"
+
+🌤 *INFO ÚTIL*
+• "clima" - pronóstico del tiempo
+• "dólar" - cotización actual
+• "noticias" - titulares del día
+• "buen día" - resumen completo del día
+
+🎤 *También podés enviarme audios* y los entiendo perfectamente.
+
+¿En qué te puedo ayudar?"""
+
 def get_ai_response(user_message, user_id):
     """Obtiene respuesta de Claude"""
+    # Verificar si es usuario nuevo
+    is_first_message = is_new_user(user_id)
+
     # Cargar conversación desde archivo (persistente)
     conversation = get_conversation(user_id)
 
     # Agregar mensaje del usuario
     add_to_conversation(user_id, "user", user_message)
     conversation.append({"role": "user", "content": user_message})
+
+    # Si es usuario nuevo y dice hola/buen día, mostrar bienvenida
+    greeting_words = ["hola", "buenas", "buen dia", "buen día", "buenos dias", "buenos días", "hey", "hello", "hi", "que tal", "qué tal"]
+    if is_first_message and any(word in user_message.lower() for word in greeting_words):
+        welcome = get_welcome_message()
+        add_to_conversation(user_id, "assistant", welcome)
+        return welcome
 
     now = datetime.now(TIMEZONE)
     today = now.strftime("%Y-%m-%d %A")
