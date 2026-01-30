@@ -57,9 +57,8 @@ ICLOUD_EMAIL = get_env_var("ICLOUD_EMAIL")
 ICLOUD_APP_PASSWORD = get_env_var("ICLOUD_APP_PASSWORD")
 CALDAV_URL = "https://caldav.icloud.com"
 
-# Whisper deshabilitado para deploy en la nube (muy pesado)
-whisper_model = None
-print("Whisper deshabilitado - los audios no se transcribirán en la nube.")
+# OpenAI API para transcripción de audio (Whisper API)
+OPENAI_API_KEY = get_env_var("OPENAI_API_KEY")
 
 # Historial de conversaciones por usuario
 conversations = {}
@@ -1062,9 +1061,9 @@ def get_ai_response(user_message, user_id):
 
 
 def transcribe_audio(audio_url):
-    """Descarga y transcribe audio usando Whisper"""
-    if whisper_model is None:
-        print("Whisper no está disponible")
+    """Descarga y transcribe audio usando OpenAI Whisper API"""
+    if not OPENAI_API_KEY:
+        print("OpenAI API key no configurada")
         return None
 
     try:
@@ -1077,13 +1076,34 @@ def transcribe_audio(audio_url):
             f.write(response.content)
             temp_path = f.name
 
-        print(f"Transcribiendo audio...")
-        result = whisper_model.transcribe(temp_path, language="es")
+        print(f"Transcribiendo audio con OpenAI Whisper API...")
+
+        # Usar OpenAI Whisper API
+        with open(temp_path, "rb") as audio_file:
+            transcription_response = requests.post(
+                "https://api.openai.com/v1/audio/transcriptions",
+                headers={
+                    "Authorization": f"Bearer {OPENAI_API_KEY}"
+                },
+                files={
+                    "file": ("audio.ogg", audio_file, "audio/ogg")
+                },
+                data={
+                    "model": "whisper-1",
+                    "language": "es"
+                }
+            )
+
         os.unlink(temp_path)
 
-        text = result["text"]
-        print(f"Transcripción completada: {text}")
-        return text
+        if transcription_response.status_code == 200:
+            text = transcription_response.json().get("text", "")
+            print(f"Transcripción completada: {text}")
+            return text
+        else:
+            print(f"Error en API de OpenAI: {transcription_response.status_code} - {transcription_response.text}")
+            return None
+
     except Exception as e:
         print(f"Error transcribiendo audio: {e}")
         import traceback
