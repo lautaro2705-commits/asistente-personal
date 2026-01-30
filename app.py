@@ -913,7 +913,7 @@ def process_actions(response_text, user_id):
     # Procesar clima
     clima_match = re.search(r"\[CLIMA\](.*?)\[/CLIMA\]", result)
     if clima_match:
-        city = clima_match.group(1).strip() or "Buenos Aires"
+        city = clima_match.group(1).strip() or "Cordoba,Argentina"
         weather = get_weather(city)
         result = re.sub(r"\[CLIMA\].*?\[/CLIMA\]", "", result)
         result += f"\n\n{weather}"
