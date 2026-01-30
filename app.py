@@ -60,9 +60,6 @@ CALDAV_URL = "https://caldav.icloud.com"
 # OpenAI API para transcripción de audio (Whisper API)
 OPENAI_API_KEY = get_env_var("OPENAI_API_KEY")
 
-# Historial de conversaciones por usuario
-conversations = {}
-
 # Almacena los números de WhatsApp registrados para recordatorios
 registered_users = {}
 
@@ -73,6 +70,43 @@ TIMEZONE = pytz.timezone("America/Argentina/Buenos_Aires")
 DATA_DIR = os.path.dirname(os.path.abspath(__file__))
 TASKS_FILE = os.path.join(DATA_DIR, "tasks.json")
 NOTES_FILE = os.path.join(DATA_DIR, "notes.json")
+CONVERSATIONS_FILE = os.path.join(DATA_DIR, "conversations.json")
+
+# ==================== HISTORIAL DE CONVERSACIONES ====================
+
+def load_conversations():
+    """Carga el historial de conversaciones desde archivo"""
+    if os.path.exists(CONVERSATIONS_FILE):
+        try:
+            with open(CONVERSATIONS_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_conversations(conversations):
+    """Guarda el historial de conversaciones"""
+    with open(CONVERSATIONS_FILE, "w") as f:
+        json.dump(conversations, f, ensure_ascii=False)
+
+def get_conversation(user_id):
+    """Obtiene la conversación de un usuario"""
+    conversations = load_conversations()
+    return conversations.get(user_id, [])
+
+def add_to_conversation(user_id, role, content):
+    """Agrega un mensaje a la conversación"""
+    conversations = load_conversations()
+    if user_id not in conversations:
+        conversations[user_id] = []
+
+    conversations[user_id].append({"role": role, "content": content})
+
+    # Mantener los últimos 50 mensajes para buen contexto
+    if len(conversations[user_id]) > 50:
+        conversations[user_id] = conversations[user_id][-50:]
+
+    save_conversations(conversations)
 
 # ==================== SISTEMA DE TAREAS ====================
 
@@ -1032,13 +1066,12 @@ def check_and_send_reminders():
 
 def get_ai_response(user_message, user_id):
     """Obtiene respuesta de Claude"""
-    if user_id not in conversations:
-        conversations[user_id] = []
+    # Cargar conversación desde archivo (persistente)
+    conversation = get_conversation(user_id)
 
-    conversations[user_id].append({"role": "user", "content": user_message})
-
-    if len(conversations[user_id]) > 20:
-        conversations[user_id] = conversations[user_id][-20:]
+    # Agregar mensaje del usuario
+    add_to_conversation(user_id, "user", user_message)
+    conversation.append({"role": "user", "content": user_message})
 
     now = datetime.now(TIMEZONE)
     today = now.strftime("%Y-%m-%d %A")
@@ -1048,11 +1081,13 @@ def get_ai_response(user_message, user_id):
         model="claude-sonnet-4-20250514",
         max_tokens=1024,
         system=SYSTEM_PROMPT.format(today=today, current_time=current_time),
-        messages=conversations[user_id],
+        messages=conversation,
     )
 
     assistant_message = response.content[0].text
-    conversations[user_id].append({"role": "assistant", "content": assistant_message})
+
+    # Guardar respuesta del asistente
+    add_to_conversation(user_id, "assistant", assistant_message)
 
     # Procesar todas las acciones
     final_response = process_actions(assistant_message, user_id)
