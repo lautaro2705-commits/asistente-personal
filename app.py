@@ -1868,15 +1868,17 @@ def whatsapp_webhook():
         ai_response = get_ai_response(message_body, from_number)
     except Exception as e:
         ai_response = f"Error: {str(e)}"
+        print(f"Error en get_ai_response: {e}")
 
-    # Si el mensaje es largo, enviar por partes usando la API
-    if len(ai_response) > 1500:
+    # Siempre enviar usando la API de Twilio (más confiable con WhatsApp Business)
+    try:
         send_whatsapp_message(from_number, ai_response)
-        return "", 200
-    else:
-        resp = MessagingResponse()
-        resp.message(ai_response)
-        return str(resp)
+        print(f"Respuesta enviada a {from_number}")
+    except Exception as e:
+        print(f"Error enviando respuesta: {e}")
+
+    # Responder inmediatamente a Twilio con 200 OK
+    return "", 200
 
 
 @app.route("/events", methods=["GET"])
