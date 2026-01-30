@@ -1728,6 +1728,13 @@ def get_ai_response(user_message, user_id):
         add_to_conversation(user_id, "assistant", welcome)
         return welcome
 
+    # Si dice "ayuda", mostrar siempre el mensaje de funcionalidades
+    help_words = ["ayuda", "help", "que podes hacer", "qué podés hacer", "como funciona", "cómo funciona", "funciones", "comandos"]
+    if any(word in user_message.lower() for word in help_words):
+        welcome = get_welcome_message()
+        add_to_conversation(user_id, "assistant", welcome)
+        return welcome
+
     now = datetime.now(TIMEZONE)
     today = now.strftime("%Y-%m-%d %A")
     current_time = now.strftime("%H:%M")
