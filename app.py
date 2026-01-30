@@ -370,7 +370,7 @@ def get_news_argentina():
         root = ET.fromstring(response.content)
 
         news = []
-        for item in root.findall(".//item")[:5]:
+        for item in root.findall(".//item")[:3]:
             title = item.find("title").text
             # Limpiar el título (quitar la fuente)
             if " - " in title:
@@ -594,12 +594,7 @@ def generate_daily_summary(user_id):
     summary += "\n"
 
     # Noticias
-    summary += format_news() + "\n"
-
-    # Cine/Streaming
-    entertainment = get_entertainment_news()
-    if entertainment:
-        summary += entertainment
+    summary += format_news()
 
     return summary
 
@@ -689,6 +684,9 @@ Para ver noticias de FÚTBOL:
 Para ver bailes de CUARTETO:
 [CUARTETO][/CUARTETO]
 
+Para ver noticias de CINE/STREAMING:
+[CINE][/CINE]
+
 INSTRUCCIONES:
 - Responde de forma breve y amable
 - Cuando el usuario pida algo, ejecuta la acción directamente sin pedir confirmación
@@ -704,6 +702,7 @@ INSTRUCCIONES:
 - Si dice "dólar" o "cotización", muestra la cotización del dólar
 - Si dice "fútbol" o "noticias de boca/inter miami", muestra noticias de fútbol
 - Si dice "cuarteto", "bailes" o "qué bailes hay en la semana", muestra info de cuarteto
+- Si dice "cine", "películas", "estrenos", "netflix" o "streaming", muestra info de cine/streaming
 
 Hoy es: {today}
 """
@@ -961,6 +960,11 @@ def process_actions(response_text, user_id):
     if "[CUARTETO][/CUARTETO]" in result:
         result = result.replace("[CUARTETO][/CUARTETO]", "")
         result += f"\n\n{get_cuarteto_events()}"
+
+    # Procesar cine/streaming
+    if "[CINE][/CINE]" in result:
+        result = result.replace("[CINE][/CINE]", "")
+        result += f"\n\n{get_entertainment_news()}"
 
     return result.strip()
 
