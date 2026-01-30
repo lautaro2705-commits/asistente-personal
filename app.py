@@ -373,6 +373,313 @@ def send_medication_reminder(period):
                 except Exception as e:
                     print(f"Error enviando recordatorio a {user_id}: {e}")
 
+# ==================== RECORDATORIOS PERSONALIZADOS ====================
+
+REMINDERS_FILE = os.path.join(DATA_DIR, "reminders.json")
+
+def load_reminders():
+    """Carga los recordatorios desde el archivo JSON"""
+    if os.path.exists(REMINDERS_FILE):
+        try:
+            with open(REMINDERS_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_reminders(reminders):
+    """Guarda los recordatorios"""
+    with open(REMINDERS_FILE, "w") as f:
+        json.dump(reminders, f, indent=2, ensure_ascii=False)
+
+def add_reminder(user_id, message, remind_at):
+    """Agrega un recordatorio"""
+    reminders = load_reminders()
+    if user_id not in reminders:
+        reminders[user_id] = []
+
+    reminder = {
+        "id": len(reminders[user_id]) + 1,
+        "message": message,
+        "remind_at": remind_at,
+        "created": datetime.now(TIMEZONE).isoformat(),
+        "sent": False
+    }
+    reminders[user_id].append(reminder)
+    save_reminders(reminders)
+    return reminder
+
+def get_pending_reminders(user_id):
+    """Obtiene recordatorios pendientes"""
+    reminders = load_reminders()
+    if user_id not in reminders:
+        return []
+    return [r for r in reminders[user_id] if not r.get("sent", False)]
+
+def mark_reminder_sent(user_id, reminder_id):
+    """Marca un recordatorio como enviado"""
+    reminders = load_reminders()
+    if user_id in reminders:
+        for r in reminders[user_id]:
+            if r["id"] == reminder_id:
+                r["sent"] = True
+                save_reminders(reminders)
+                return True
+    return False
+
+def delete_reminder(user_id, reminder_id):
+    """Elimina un recordatorio"""
+    reminders = load_reminders()
+    if user_id in reminders:
+        reminders[user_id] = [r for r in reminders[user_id] if r["id"] != reminder_id]
+        save_reminders(reminders)
+        return True
+    return False
+
+def format_reminders(user_id):
+    """Formatea los recordatorios pendientes"""
+    pending = get_pending_reminders(user_id)
+    if not pending:
+        return "⏰ No tienes recordatorios pendientes."
+
+    result = "⏰ *Tus recordatorios:*\n"
+    for r in pending:
+        try:
+            remind_time = datetime.fromisoformat(r["remind_at"])
+            time_str = remind_time.strftime("%d/%m %H:%M")
+            result += f"  {r['id']}. {r['message']} - {time_str}\n"
+        except:
+            result += f"  {r['id']}. {r['message']}\n"
+    return result
+
+def check_and_send_custom_reminders():
+    """Revisa y envía recordatorios personalizados"""
+    reminders = load_reminders()
+    now = datetime.now(TIMEZONE)
+
+    for user_id in reminders:
+        for reminder in reminders[user_id]:
+            if reminder.get("sent", False):
+                continue
+
+            try:
+                remind_at = datetime.fromisoformat(reminder["remind_at"])
+                if remind_at.tzinfo is None:
+                    remind_at = TIMEZONE.localize(remind_at)
+
+                if now >= remind_at:
+                    message = f"⏰ *Recordatorio:*\n\n{reminder['message']}"
+                    send_whatsapp_message(user_id, message)
+                    mark_reminder_sent(user_id, reminder["id"])
+                    print(f"Recordatorio enviado a {user_id}: {reminder['message']}")
+            except Exception as e:
+                print(f"Error procesando recordatorio: {e}")
+
+# ==================== LISTA DE COMPRAS ====================
+
+SHOPPING_FILE = os.path.join(DATA_DIR, "shopping.json")
+
+def load_shopping():
+    """Carga la lista de compras"""
+    if os.path.exists(SHOPPING_FILE):
+        try:
+            with open(SHOPPING_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_shopping(shopping):
+    """Guarda la lista de compras"""
+    with open(SHOPPING_FILE, "w") as f:
+        json.dump(shopping, f, indent=2, ensure_ascii=False)
+
+def add_shopping_item(user_id, item):
+    """Agrega un item a la lista de compras"""
+    shopping = load_shopping()
+    if user_id not in shopping:
+        shopping[user_id] = []
+
+    shopping_item = {
+        "id": len(shopping[user_id]) + 1,
+        "item": item,
+        "bought": False,
+        "added": datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+    }
+    shopping[user_id].append(shopping_item)
+    save_shopping(shopping)
+    return shopping_item
+
+def mark_item_bought(user_id, item_id):
+    """Marca un item como comprado"""
+    shopping = load_shopping()
+    if user_id in shopping:
+        for item in shopping[user_id]:
+            if item["id"] == item_id:
+                item["bought"] = True
+                save_shopping(shopping)
+                return True
+    return False
+
+def delete_shopping_item(user_id, item_id):
+    """Elimina un item de la lista"""
+    shopping = load_shopping()
+    if user_id in shopping:
+        shopping[user_id] = [i for i in shopping[user_id] if i["id"] != item_id]
+        # Reordenar IDs
+        for idx, item in enumerate(shopping[user_id]):
+            item["id"] = idx + 1
+        save_shopping(shopping)
+        return True
+    return False
+
+def clear_bought_items(user_id):
+    """Elimina todos los items comprados"""
+    shopping = load_shopping()
+    if user_id in shopping:
+        shopping[user_id] = [i for i in shopping[user_id] if not i.get("bought", False)]
+        # Reordenar IDs
+        for idx, item in enumerate(shopping[user_id]):
+            item["id"] = idx + 1
+        save_shopping(shopping)
+        return True
+    return False
+
+def format_shopping_list(user_id):
+    """Formatea la lista de compras"""
+    shopping = load_shopping()
+    items = shopping.get(user_id, [])
+
+    if not items:
+        return "🛒 Tu lista de compras está vacía."
+
+    pending = [i for i in items if not i.get("bought", False)]
+    bought = [i for i in items if i.get("bought", False)]
+
+    result = "🛒 *Lista de compras:*\n"
+
+    if pending:
+        result += "\n*Pendientes:*\n"
+        for item in pending:
+            result += f"  {item['id']}. {item['item']}\n"
+
+    if bought:
+        result += "\n*Comprados:* ✓\n"
+        for item in bought:
+            result += f"  ~{item['item']}~\n"
+
+    return result
+
+# ==================== ANÁLISIS DE GASTOS ====================
+
+def analyze_expenses(user_id):
+    """Analiza los gastos del usuario"""
+    expenses = load_expenses()
+    user_expenses = expenses.get(user_id, [])
+
+    if not user_expenses:
+        return "📊 No tienes gastos registrados para analizar."
+
+    now = datetime.now(TIMEZONE)
+
+    # Gastos del mes actual
+    current_month = now.strftime("%Y-%m")
+    month_expenses = []
+    for e in user_expenses:
+        if e.get("date", "").startswith(current_month):
+            month_expenses.append(e)
+
+    # Gastos del mes anterior
+    last_month = (now.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+    last_month_expenses = []
+    for e in user_expenses:
+        if e.get("date", "").startswith(last_month):
+            last_month_expenses.append(e)
+
+    # Gastos de la semana
+    week_start = now - timedelta(days=now.weekday())
+    week_expenses = []
+    for e in user_expenses:
+        try:
+            exp_date = datetime.strptime(e["date"].split()[0], "%Y-%m-%d")
+            if exp_date >= week_start.replace(tzinfo=None):
+                week_expenses.append(e)
+        except:
+            pass
+
+    total_month = sum(e["amount"] for e in month_expenses)
+    total_last_month = sum(e["amount"] for e in last_month_expenses)
+    total_week = sum(e["amount"] for e in week_expenses)
+
+    result = "📊 *Análisis de gastos:*\n\n"
+
+    result += f"💰 *Esta semana:* ${total_week:,.0f}\n"
+    result += f"💰 *Este mes:* ${total_month:,.0f}\n"
+
+    if total_last_month > 0:
+        diff = total_month - total_last_month
+        percent = (diff / total_last_month) * 100
+        if diff > 0:
+            result += f"📈 Gastaste ${diff:,.0f} más que el mes pasado (+{percent:.0f}%)\n"
+        elif diff < 0:
+            result += f"📉 Gastaste ${abs(diff):,.0f} menos que el mes pasado ({percent:.0f}%)\n"
+        else:
+            result += "📊 Igual que el mes pasado\n"
+
+    # Categoría con más gastos
+    if month_expenses:
+        by_category = {}
+        for e in month_expenses:
+            cat = e.get("category", "General")
+            by_category[cat] = by_category.get(cat, 0) + e["amount"]
+
+        top_category = max(by_category, key=by_category.get)
+        top_amount = by_category[top_category]
+        result += f"\n🏷 *Mayor gasto:* {top_category} (${top_amount:,.0f})\n"
+
+        result += "\n*Por categoría este mes:*\n"
+        for cat, amount in sorted(by_category.items(), key=lambda x: -x[1]):
+            percent = (amount / total_month) * 100 if total_month > 0 else 0
+            result += f"  • {cat}: ${amount:,.0f} ({percent:.0f}%)\n"
+
+    # Promedio diario
+    if month_expenses:
+        days_in_month = now.day
+        daily_avg = total_month / days_in_month
+        result += f"\n📅 *Promedio diario:* ${daily_avg:,.0f}"
+
+    return result
+
+# ==================== UBICACIÓN ====================
+
+USER_LOCATIONS_FILE = os.path.join(DATA_DIR, "locations.json")
+
+def load_locations():
+    """Carga las ubicaciones guardadas"""
+    if os.path.exists(USER_LOCATIONS_FILE):
+        try:
+            with open(USER_LOCATIONS_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_locations(locations):
+    """Guarda las ubicaciones"""
+    with open(USER_LOCATIONS_FILE, "w") as f:
+        json.dump(locations, f, ensure_ascii=False)
+
+def set_user_location(user_id, city):
+    """Guarda la ubicación del usuario"""
+    locations = load_locations()
+    locations[user_id] = city
+    save_locations(locations)
+
+def get_user_location(user_id):
+    """Obtiene la ubicación del usuario"""
+    locations = load_locations()
+    return locations.get(user_id, "Cordoba,Argentina")
+
 # ==================== DÓLAR ====================
 
 def get_dolar():
@@ -838,6 +1145,36 @@ Para listar MEDICAMENTOS:
 Para registrar que TOMÓ los medicamentos:
 [MED_TOMADO]<periodo: mañana o noche>[/MED_TOMADO]
 
+Para agregar RECORDATORIO:
+[RECORDATORIO]mensaje|YYYY-MM-DD HH:MM[/RECORDATORIO]
+
+Para listar RECORDATORIOS:
+[RECORDATORIOS_LISTAR][/RECORDATORIOS_LISTAR]
+
+Para eliminar RECORDATORIO:
+[RECORDATORIO_ELIMINAR]<número>[/RECORDATORIO_ELIMINAR]
+
+Para agregar item a LISTA DE COMPRAS:
+[COMPRA_AGREGAR]<item>[/COMPRA_AGREGAR]
+
+Para ver LISTA DE COMPRAS:
+[COMPRAS_LISTAR][/COMPRAS_LISTAR]
+
+Para marcar item COMPRADO:
+[COMPRA_MARCAR]<número>[/COMPRA_MARCAR]
+
+Para eliminar item de COMPRAS:
+[COMPRA_ELIMINAR]<número>[/COMPRA_ELIMINAR]
+
+Para limpiar items COMPRADOS:
+[COMPRAS_LIMPIAR][/COMPRAS_LIMPIAR]
+
+Para ver ANÁLISIS de gastos:
+[GASTOS_ANALISIS][/GASTOS_ANALISIS]
+
+Para cambiar UBICACIÓN (para el clima):
+[UBICACION]<ciudad>[/UBICACION]
+
 INSTRUCCIONES:
 - Responde de forma breve y amable
 - Cuando el usuario pida algo, ejecuta la acción directamente sin pedir confirmación
@@ -858,6 +1195,15 @@ INSTRUCCIONES:
 - Si dice "mis medicamentos" o "qué medicamentos tomo", muestra la lista
 - Si dice "tomé mis medicamentos", "ya tomé" o "medicamentos tomados", registra que los tomó (usa "mañana" si es antes de las 14:00, "noche" si es después)
 - Si dice "eliminar medicamento X", elimina el medicamento
+- Si dice "recordame en X horas/minutos que Y" o "avisame a las X que Y", crea un recordatorio con fecha y hora calculada
+- Si dice "mis recordatorios" o "qué recordatorios tengo", muestra los recordatorios
+- Si dice "eliminar recordatorio X", elimina el recordatorio
+- Si dice "agregar a la lista de compras: X" o "comprar X", agrega a la lista
+- Si dice "lista de compras" o "qué tengo que comprar", muestra la lista
+- Si dice "compré X" o "ya compré el item X", marca como comprado
+- Si dice "limpiar comprados", elimina los items ya comprados
+- Si dice "análisis de gastos" o "cómo voy con los gastos", muestra análisis detallado
+- Si dice "estoy en X" o "mi ubicación es X" o "cambiar ubicación a X", guarda la ubicación para el clima
 
 Hoy es: {today}
 """
@@ -1069,7 +1415,7 @@ def process_actions(response_text, user_id):
     # Procesar clima
     clima_match = re.search(r"\[CLIMA\](.*?)\[/CLIMA\]", result)
     if clima_match:
-        city = clima_match.group(1).strip() or "Cordoba,Argentina"
+        city = clima_match.group(1).strip() or get_user_location(user_id)
         weather = get_weather(city)
         result = re.sub(r"\[CLIMA\].*?\[/CLIMA\]", "", result)
         result += f"\n\n{weather}"
@@ -1160,6 +1506,94 @@ def process_actions(response_text, user_id):
         log_medication_taken(user_id, period)
         result = re.sub(r"\[MED_TOMADO\].*?\[/MED_TOMADO\]", "", result)
         result += f"\n\n✅ Registrado: medicamentos de la {period} tomados. ¡Bien hecho! 💪"
+
+    # Procesar agregar recordatorio
+    reminder_match = re.search(r"\[RECORDATORIO\](.*?)\[/RECORDATORIO\]", result)
+    if reminder_match:
+        reminder_data = reminder_match.group(1).strip().split("|")
+        if len(reminder_data) >= 2:
+            try:
+                message_text = reminder_data[0].strip()
+                remind_at_str = reminder_data[1].strip()
+                remind_at = datetime.strptime(remind_at_str, "%Y-%m-%d %H:%M")
+                remind_at = TIMEZONE.localize(remind_at)
+                reminder = add_reminder(user_id, message_text, remind_at.isoformat())
+                result = re.sub(r"\[RECORDATORIO\].*?\[/RECORDATORIO\]", "", result)
+                result += f"\n\n✅ Recordatorio creado: '{message_text}' para el {remind_at.strftime('%d/%m/%Y a las %H:%M')}"
+            except Exception as e:
+                print(f"Error creando recordatorio: {e}")
+                result = re.sub(r"\[RECORDATORIO\].*?\[/RECORDATORIO\]", "", result)
+                result += "\n\n❌ No pude crear el recordatorio. Formato: mensaje|YYYY-MM-DD HH:MM"
+        else:
+            result = re.sub(r"\[RECORDATORIO\].*?\[/RECORDATORIO\]", "", result)
+            result += "\n\n❌ Formato incorrecto. Usa: mensaje|YYYY-MM-DD HH:MM"
+
+    # Procesar listar recordatorios
+    if "[RECORDATORIOS_LISTAR][/RECORDATORIOS_LISTAR]" in result:
+        result = result.replace("[RECORDATORIOS_LISTAR][/RECORDATORIOS_LISTAR]", "")
+        result += f"\n\n{format_reminders(user_id)}"
+
+    # Procesar eliminar recordatorio
+    reminder_del_match = re.search(r"\[RECORDATORIO_ELIMINAR\](\d+)\[/RECORDATORIO_ELIMINAR\]", result)
+    if reminder_del_match:
+        reminder_id = int(reminder_del_match.group(1))
+        if delete_reminder(user_id, reminder_id):
+            result = re.sub(r"\[RECORDATORIO_ELIMINAR\]\d+\[/RECORDATORIO_ELIMINAR\]", "", result)
+            result += f"\n\n✅ Recordatorio {reminder_id} eliminado"
+        else:
+            result = re.sub(r"\[RECORDATORIO_ELIMINAR\]\d+\[/RECORDATORIO_ELIMINAR\]", "", result)
+            result += f"\n\n❌ No encontré el recordatorio {reminder_id}"
+
+    # Procesar agregar a lista de compras
+    shopping_add_match = re.search(r"\[COMPRA_AGREGAR\](.*?)\[/COMPRA_AGREGAR\]", result)
+    if shopping_add_match:
+        item = shopping_add_match.group(1).strip()
+        add_shopping_item(user_id, item)
+        result = re.sub(r"\[COMPRA_AGREGAR\].*?\[/COMPRA_AGREGAR\]", "", result)
+        result += f"\n\n✅ Agregado a la lista: {item}"
+
+    # Procesar listar compras
+    if "[COMPRAS_LISTAR][/COMPRAS_LISTAR]" in result:
+        result = result.replace("[COMPRAS_LISTAR][/COMPRAS_LISTAR]", "")
+        result += f"\n\n{format_shopping_list(user_id)}"
+
+    # Procesar marcar comprado
+    shopping_mark_match = re.search(r"\[COMPRA_MARCAR\](\d+)\[/COMPRA_MARCAR\]", result)
+    if shopping_mark_match:
+        item_id = int(shopping_mark_match.group(1))
+        if mark_item_bought(user_id, item_id):
+            result = re.sub(r"\[COMPRA_MARCAR\]\d+\[/COMPRA_MARCAR\]", "", result)
+            result += f"\n\n✅ Item {item_id} marcado como comprado"
+        else:
+            result = re.sub(r"\[COMPRA_MARCAR\]\d+\[/COMPRA_MARCAR\]", "", result)
+            result += f"\n\n❌ No encontré el item {item_id}"
+
+    # Procesar eliminar de compras
+    shopping_del_match = re.search(r"\[COMPRA_ELIMINAR\](\d+)\[/COMPRA_ELIMINAR\]", result)
+    if shopping_del_match:
+        item_id = int(shopping_del_match.group(1))
+        if delete_shopping_item(user_id, item_id):
+            result = re.sub(r"\[COMPRA_ELIMINAR\]\d+\[/COMPRA_ELIMINAR\]", "", result)
+            result += f"\n\n✅ Item {item_id} eliminado de la lista"
+
+    # Procesar limpiar comprados
+    if "[COMPRAS_LIMPIAR][/COMPRAS_LIMPIAR]" in result:
+        clear_bought_items(user_id)
+        result = result.replace("[COMPRAS_LIMPIAR][/COMPRAS_LIMPIAR]", "")
+        result += "\n\n✅ Items comprados eliminados de la lista"
+
+    # Procesar análisis de gastos
+    if "[GASTOS_ANALISIS][/GASTOS_ANALISIS]" in result:
+        result = result.replace("[GASTOS_ANALISIS][/GASTOS_ANALISIS]", "")
+        result += f"\n\n{analyze_expenses(user_id)}"
+
+    # Procesar cambio de ubicación
+    location_match = re.search(r"\[UBICACION\](.*?)\[/UBICACION\]", result)
+    if location_match:
+        city = location_match.group(1).strip()
+        set_user_location(user_id, city)
+        result = re.sub(r"\[UBICACION\].*?\[/UBICACION\]", "", result)
+        result += f"\n\n✅ Ubicación guardada: {city}. El clima ahora será de esta ciudad."
 
     return result.strip()
 
@@ -1432,6 +1866,8 @@ def send_reminder():
 
 scheduler = BackgroundScheduler(timezone=TIMEZONE)
 scheduler.add_job(check_and_send_reminders, "interval", minutes=5)
+# Recordatorios personalizados cada minuto
+scheduler.add_job(check_and_send_custom_reminders, "interval", minutes=1)
 # Resumen matutino a las 8:00 AM
 scheduler.add_job(send_morning_summary, "cron", hour=8, minute=45)
 # Recordatorio de medicamentos a las 10:00 AM
