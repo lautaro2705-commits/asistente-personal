@@ -521,30 +521,55 @@ def format_notes(user_id):
 def get_weather(city="Cordoba,Argentina"):
     """Obtiene el clima usando wttr.in (gratis, sin API key)"""
     try:
-        url = f"https://wttr.in/{city}?format=j1"
-        response = requests.get(url, timeout=10)
+        # Limpiar el nombre de la ciudad
+        city_clean = city.replace(" ", "+")
+        url = f"https://wttr.in/{city_clean}?format=j1"
+
+        # Agregar User-Agent para evitar bloqueos
+        headers = {
+            "User-Agent": "Mozilla/5.0 (compatible; AsistentePersonal/1.0)"
+        }
+        response = requests.get(url, timeout=15, headers=headers)
+
+        if response.status_code != 200:
+            print(f"Error clima: HTTP {response.status_code}")
+            return "No pude obtener el clima en este momento."
+
         data = response.json()
 
         current = data["current_condition"][0]
         temp = current["temp_C"]
         feels_like = current["FeelsLikeC"]
         humidity = current["humidity"]
-        desc = current["lang_es"][0]["value"] if "lang_es" in current else current["weatherDesc"][0]["value"]
+
+        # Intentar obtener descripción en español
+        if "lang_es" in current and current["lang_es"]:
+            desc = current["lang_es"][0]["value"]
+        else:
+            desc = current["weatherDesc"][0]["value"]
 
         # Pronóstico de hoy
         today = data["weather"][0]
         max_temp = today["maxtempC"]
         min_temp = today["mintempC"]
 
-        weather_info = f"""🌤 *Clima en {city}:*
+        # Formatear nombre de ciudad para mostrar
+        city_display = city.split(",")[0].replace("+", " ")
+
+        weather_info = f"""🌤 *Clima en {city_display}:*
 🌡 Temperatura: {temp}°C (sensación {feels_like}°C)
 📊 Máx: {max_temp}°C / Mín: {min_temp}°C
 💧 Humedad: {humidity}%
 📝 {desc}"""
 
         return weather_info
+    except requests.exceptions.Timeout:
+        print("Error clima: Timeout")
+        return "No pude obtener el clima (tiempo agotado). Intentá de nuevo."
     except Exception as e:
         print(f"Error obteniendo clima: {e}")
+        import traceback
+        traceback.print_exc()
         return "No pude obtener el clima en este momento."
 
 # ==================== MEDICAMENTOS ====================
