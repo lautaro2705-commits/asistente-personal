@@ -1735,6 +1735,22 @@ def get_ai_response(user_message, user_id):
         add_to_conversation(user_id, "assistant", welcome)
         return welcome
 
+    # Comandos directos que no necesitan pasar por Claude
+    msg_lower = user_message.lower().strip()
+
+    # Clima directo
+    if msg_lower in ["clima", "el clima", "como esta el clima", "cómo está el clima", "que clima hace", "qué clima hace", "tiempo"]:
+        city = get_user_location(user_id)
+        weather = get_weather(city)
+        add_to_conversation(user_id, "assistant", weather)
+        return weather
+
+    # Dólar directo
+    if msg_lower in ["dolar", "dólar", "cotizacion", "cotización", "precio del dolar", "precio del dólar"]:
+        dolar = get_dolar()
+        add_to_conversation(user_id, "assistant", dolar)
+        return dolar
+
     now = datetime.now(TIMEZONE)
     today = now.strftime("%Y-%m-%d %A")
     current_time = now.strftime("%H:%M")
