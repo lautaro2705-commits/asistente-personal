@@ -72,6 +72,281 @@ TASKS_FILE = os.path.join(DATA_DIR, "tasks.json")
 NOTES_FILE = os.path.join(DATA_DIR, "notes.json")
 CONVERSATIONS_FILE = os.path.join(DATA_DIR, "conversations.json")
 CAREGIVERS_FILE = os.path.join(DATA_DIR, "caregivers.json")
+USER_PROFILES_FILE = os.path.join(DATA_DIR, "user_profiles.json")
+WELLNESS_CHECK_FILE = os.path.join(DATA_DIR, "wellness_checks.json")
+USER_ACTIVITY_FILE = os.path.join(DATA_DIR, "user_activity.json")
+
+# ==================== PERFILES DE USUARIO ====================
+
+def load_user_profiles():
+    """Carga los perfiles de usuario"""
+    if os.path.exists(USER_PROFILES_FILE):
+        try:
+            with open(USER_PROFILES_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_user_profiles(profiles):
+    """Guarda los perfiles de usuario"""
+    with open(USER_PROFILES_FILE, "w") as f:
+        json.dump(profiles, f, ensure_ascii=False)
+
+def get_user_profile(user_id):
+    """Obtiene el perfil de un usuario"""
+    profiles = load_user_profiles()
+    return profiles.get(user_id, None)
+
+def set_user_profile(user_id, profile_type, name=None):
+    """Configura el perfil de un usuario (adulto_mayor o joven)"""
+    profiles = load_user_profiles()
+    profiles[user_id] = {
+        "type": profile_type,  # "adulto_mayor" o "joven"
+        "name": name,
+        "created": datetime.now(TIMEZONE).isoformat(),
+        "hydration_enabled": profile_type == "adulto_mayor",
+        "wellness_check_enabled": profile_type == "adulto_mayor",
+        "inactivity_alert_enabled": profile_type == "adulto_mayor"
+    }
+    save_user_profiles(profiles)
+
+def update_user_profile_setting(user_id, setting, value):
+    """Actualiza una configuración del perfil"""
+    profiles = load_user_profiles()
+    if user_id in profiles:
+        profiles[user_id][setting] = value
+        save_user_profiles(profiles)
+
+def is_profile_configured(user_id):
+    """Verifica si el usuario tiene perfil configurado"""
+    return get_user_profile(user_id) is not None
+
+def is_adulto_mayor(user_id):
+    """Verifica si el usuario es adulto mayor"""
+    profile = get_user_profile(user_id)
+    return profile and profile.get("type") == "adulto_mayor"
+
+# ==================== CHEQUEO DE BIENESTAR ====================
+
+def load_wellness_checks():
+    """Carga los chequeos de bienestar"""
+    if os.path.exists(WELLNESS_CHECK_FILE):
+        try:
+            with open(WELLNESS_CHECK_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_wellness_checks(checks):
+    """Guarda los chequeos de bienestar"""
+    with open(WELLNESS_CHECK_FILE, "w") as f:
+        json.dump(checks, f, ensure_ascii=False)
+
+def set_wellness_pending(user_id):
+    """Marca que hay un chequeo de bienestar pendiente"""
+    checks = load_wellness_checks()
+    checks[user_id] = {
+        "sent_at": datetime.now(TIMEZONE).isoformat(),
+        "date": datetime.now(TIMEZONE).strftime("%Y-%m-%d"),
+        "responded": False
+    }
+    save_wellness_checks(checks)
+
+def get_wellness_pending(user_id):
+    """Obtiene el chequeo pendiente"""
+    checks = load_wellness_checks()
+    pending = checks.get(user_id)
+    if pending and pending.get("date") == datetime.now(TIMEZONE).strftime("%Y-%m-%d"):
+        return pending
+    return None
+
+def mark_wellness_responded(user_id, response):
+    """Marca que el usuario respondió al chequeo"""
+    checks = load_wellness_checks()
+    if user_id in checks:
+        checks[user_id]["responded"] = True
+        checks[user_id]["response"] = response
+        checks[user_id]["responded_at"] = datetime.now(TIMEZONE).isoformat()
+        save_wellness_checks(checks)
+
+def send_wellness_check():
+    """Envía chequeo de bienestar a adultos mayores"""
+    print(f"[{datetime.now()}] Enviando chequeos de bienestar...")
+
+    profiles = load_user_profiles()
+
+    for user_id, profile in profiles.items():
+        if profile.get("type") == "adulto_mayor" and profile.get("wellness_check_enabled", True):
+            # Verificar si ya respondió hoy
+            pending = get_wellness_pending(user_id)
+            if pending and pending.get("responded"):
+                continue
+
+            name = profile.get("name", "")
+            greeting = f"¡Buen día{', ' + name if name else ''}! ☀️"
+
+            message = f"{greeting}\n\n¿Cómo te sentís hoy?\n\n👍 Respondé *bien*, *mal* o contame cómo estás."
+
+            try:
+                send_whatsapp_message(user_id, message)
+                set_wellness_pending(user_id)
+                print(f"Chequeo de bienestar enviado a {user_id}")
+            except Exception as e:
+                print(f"Error enviando chequeo: {e}")
+
+def check_wellness_responses():
+    """Verifica respuestas a chequeos de bienestar y alerta si no respondió"""
+    print(f"[{datetime.now()}] Verificando respuestas de bienestar...")
+
+    checks = load_wellness_checks()
+    now = datetime.now(TIMEZONE)
+
+    for user_id, check in checks.items():
+        if check.get("responded") or check.get("alerted"):
+            continue
+
+        if check.get("date") != now.strftime("%Y-%m-%d"):
+            continue
+
+        sent_at = datetime.fromisoformat(check["sent_at"])
+        minutes_passed = (now - sent_at).total_seconds() / 60
+
+        if minutes_passed >= 30:
+            # Alertar al cuidador
+            caregiver = get_caregiver(user_id)
+            if caregiver:
+                user_display = user_id.replace('whatsapp:', '')
+                alert_msg = f"⚠️ *Alerta de bienestar*\n\n{user_display} no respondió al chequeo matutino después de 30 minutos.\n\n📅 {now.strftime('%d/%m/%Y %H:%M')}"
+
+                try:
+                    send_whatsapp_message(caregiver, alert_msg)
+                    check["alerted"] = True
+                    save_wellness_checks(checks)
+                    print(f"Alerta de bienestar enviada al cuidador de {user_id}")
+                except Exception as e:
+                    print(f"Error enviando alerta de bienestar: {e}")
+
+# ==================== REGISTRO DE ACTIVIDAD ====================
+
+def load_user_activity():
+    """Carga el registro de actividad"""
+    if os.path.exists(USER_ACTIVITY_FILE):
+        try:
+            with open(USER_ACTIVITY_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_user_activity(activity):
+    """Guarda el registro de actividad"""
+    with open(USER_ACTIVITY_FILE, "w") as f:
+        json.dump(activity, f, ensure_ascii=False)
+
+def record_user_activity(user_id):
+    """Registra actividad del usuario"""
+    activity = load_user_activity()
+    now = datetime.now(TIMEZONE)
+
+    if user_id not in activity:
+        activity[user_id] = {"last_seen": None, "daily_messages": {}}
+
+    activity[user_id]["last_seen"] = now.isoformat()
+
+    today = now.strftime("%Y-%m-%d")
+    if today not in activity[user_id]["daily_messages"]:
+        activity[user_id]["daily_messages"][today] = 0
+    activity[user_id]["daily_messages"][today] += 1
+
+    # Limpiar registros de más de 30 días
+    cutoff = (now - timedelta(days=30)).strftime("%Y-%m-%d")
+    activity[user_id]["daily_messages"] = {
+        k: v for k, v in activity[user_id]["daily_messages"].items() if k >= cutoff
+    }
+
+    save_user_activity(activity)
+
+def get_user_average_activity(user_id):
+    """Obtiene el promedio de mensajes diarios del usuario"""
+    activity = load_user_activity()
+    if user_id not in activity:
+        return 0
+
+    daily = activity[user_id].get("daily_messages", {})
+    if not daily:
+        return 0
+
+    return sum(daily.values()) / len(daily)
+
+def check_user_inactivity():
+    """Verifica inactividad inusual y alerta al cuidador"""
+    print(f"[{datetime.now()}] Verificando inactividad de usuarios...")
+
+    profiles = load_user_profiles()
+    activity = load_user_activity()
+    now = datetime.now(TIMEZONE)
+    today = now.strftime("%Y-%m-%d")
+
+    # Solo verificar después de las 6PM
+    if now.hour < 18:
+        return
+
+    for user_id, profile in profiles.items():
+        if profile.get("type") != "adulto_mayor":
+            continue
+        if not profile.get("inactivity_alert_enabled", True):
+            continue
+
+        user_activity = activity.get(user_id, {})
+        daily = user_activity.get("daily_messages", {})
+        today_messages = daily.get(today, 0)
+        avg = get_user_average_activity(user_id)
+
+        # Si normalmente envía mensajes pero hoy no envió ninguno
+        if avg >= 2 and today_messages == 0:
+            # Verificar si ya alertamos hoy
+            if user_activity.get("inactivity_alert_date") == today:
+                continue
+
+            caregiver = get_caregiver(user_id)
+            if caregiver:
+                user_display = user_id.replace('whatsapp:', '')
+                alert_msg = f"⚠️ *Alerta de inactividad*\n\n{user_display} no ha enviado mensajes hoy.\n\nPromedio habitual: {avg:.0f} mensajes/día\n📅 {now.strftime('%d/%m/%Y %H:%M')}"
+
+                try:
+                    send_whatsapp_message(caregiver, alert_msg)
+                    activity[user_id]["inactivity_alert_date"] = today
+                    save_user_activity(activity)
+                    print(f"Alerta de inactividad enviada al cuidador de {user_id}")
+                except Exception as e:
+                    print(f"Error enviando alerta de inactividad: {e}")
+
+# ==================== RECORDATORIO DE HIDRATACIÓN ====================
+
+def send_hydration_reminder():
+    """Envía recordatorio de hidratación a adultos mayores"""
+    print(f"[{datetime.now()}] Enviando recordatorios de hidratación...")
+
+    profiles = load_user_profiles()
+
+    for user_id, profile in profiles.items():
+        if profile.get("type") == "adulto_mayor" and profile.get("hydration_enabled", True):
+            messages = [
+                "💧 ¡Recordatorio! ¿Tomaste agua? Mantenerse hidratado es importante.",
+                "💧 ¿Ya tomaste un vaso de agua? ¡Tu cuerpo lo agradece!",
+                "💧 Momento de hidratarse. ¿Tomaste agua recientemente?",
+                "💧 ¡No te olvides de tomar agua! Es bueno para tu salud."
+            ]
+            import random
+            message = random.choice(messages)
+
+            try:
+                send_whatsapp_message(user_id, message)
+                print(f"Recordatorio de hidratación enviado a {user_id}")
+            except Exception as e:
+                print(f"Error enviando recordatorio de hidratación: {e}")
 
 # ==================== HISTORIAL DE CONVERSACIONES ====================
 
@@ -849,7 +1124,7 @@ def get_user_location(user_id):
     locations = load_locations()
     return locations.get(user_id, "Cordoba,Argentina")
 
-# ==================== CUIDADORES ====================
+# ==================== CUIDADORES (MÚLTIPLES CONTACTOS) ====================
 
 def load_caregivers():
     """Carga los cuidadores desde archivo"""
@@ -866,27 +1141,89 @@ def save_caregivers(caregivers):
     with open(CAREGIVERS_FILE, "w") as f:
         json.dump(caregivers, f, ensure_ascii=False)
 
-def set_caregiver(user_id, caregiver_number):
-    """Guarda el cuidador de un usuario"""
+def set_caregiver(user_id, caregiver_number, is_primary=True):
+    """Guarda un cuidador de un usuario (soporta múltiples)"""
     caregivers = load_caregivers()
     # Asegurar formato whatsapp:+número
     if not caregiver_number.startswith("whatsapp:"):
         caregiver_number = f"whatsapp:{caregiver_number}"
-    caregivers[user_id] = caregiver_number
+
+    if user_id not in caregivers:
+        caregivers[user_id] = {"primary": None, "secondary": []}
+
+    # Migrar formato antiguo si es necesario
+    if isinstance(caregivers[user_id], str):
+        old_primary = caregivers[user_id]
+        caregivers[user_id] = {"primary": old_primary, "secondary": []}
+
+    if is_primary:
+        caregivers[user_id]["primary"] = caregiver_number
+    else:
+        if caregiver_number not in caregivers[user_id]["secondary"]:
+            caregivers[user_id]["secondary"].append(caregiver_number)
+
     save_caregivers(caregivers)
 
-def get_caregiver(user_id):
-    """Obtiene el cuidador de un usuario"""
+def remove_caregiver(user_id, caregiver_number):
+    """Elimina un cuidador secundario"""
     caregivers = load_caregivers()
-    return caregivers.get(user_id, None)
+    if not caregiver_number.startswith("whatsapp:"):
+        caregiver_number = f"whatsapp:{caregiver_number}"
+
+    if user_id in caregivers and isinstance(caregivers[user_id], dict):
+        if caregiver_number in caregivers[user_id].get("secondary", []):
+            caregivers[user_id]["secondary"].remove(caregiver_number)
+            save_caregivers(caregivers)
+            return True
+    return False
+
+def get_caregiver(user_id):
+    """Obtiene el cuidador principal de un usuario"""
+    caregivers = load_caregivers()
+    cg = caregivers.get(user_id)
+    if cg is None:
+        return None
+    # Compatibilidad con formato antiguo
+    if isinstance(cg, str):
+        return cg
+    return cg.get("primary")
+
+def get_all_caregivers(user_id):
+    """Obtiene todos los cuidadores de un usuario (principal + secundarios)"""
+    caregivers = load_caregivers()
+    cg = caregivers.get(user_id)
+    if cg is None:
+        return []
+    # Compatibilidad con formato antiguo
+    if isinstance(cg, str):
+        return [cg]
+    result = []
+    if cg.get("primary"):
+        result.append(cg["primary"])
+    result.extend(cg.get("secondary", []))
+    return result
+
+def alert_all_caregivers(user_id, message):
+    """Envía una alerta a todos los cuidadores del usuario"""
+    caregivers = get_all_caregivers(user_id)
+    for cg in caregivers:
+        try:
+            send_whatsapp_message(cg, message)
+            print(f"Alerta enviada a cuidador {cg}")
+        except Exception as e:
+            print(f"Error enviando a cuidador {cg}: {e}")
 
 def get_users_for_caregiver(caregiver_id):
     """Obtiene los usuarios que tienen asignado a este cuidador"""
     caregivers = load_caregivers()
     users = []
     for user_id, cg in caregivers.items():
-        if cg == caregiver_id:
-            users.append(user_id)
+        if isinstance(cg, str):
+            if cg == caregiver_id:
+                users.append(user_id)
+        elif isinstance(cg, dict):
+            if cg.get("primary") == caregiver_id or caregiver_id in cg.get("secondary", []):
+                users.append(user_id)
     return users
 
 # Recordatorios programados por el cuidador
@@ -1082,10 +1419,19 @@ def get_motivational_quote():
 
 # ==================== NOTICIAS ====================
 
-def get_news_argentina():
-    """Obtiene las 5 noticias más importantes de Argentina"""
+def shorten_url(url):
+    """Acorta una URL usando TinyURL (gratis, sin API key)"""
     try:
-        # Usar Google News RSS para Argentina
+        response = requests.get(f"https://tinyurl.com/api-create.php?url={url}", timeout=5)
+        if response.status_code == 200:
+            return response.text
+        return url
+    except:
+        return url
+
+def get_news_argentina():
+    """Obtiene las noticias más importantes de Argentina con links"""
+    try:
         url = "https://news.google.com/rss/search?q=argentina&hl=es-419&gl=AR&ceid=AR:es-419"
         response = requests.get(url, timeout=10)
 
@@ -1095,10 +1441,13 @@ def get_news_argentina():
         news = []
         for item in root.findall(".//item")[:3]:
             title = item.find("title").text
+            link = item.find("link").text
             # Limpiar el título (quitar la fuente)
             if " - " in title:
                 title = title.rsplit(" - ", 1)[0]
-            news.append(title)
+            # Acortar el link
+            short_link = shorten_url(link)
+            news.append({"title": title, "link": short_link})
 
         return news
     except Exception as e:
@@ -1106,9 +1455,8 @@ def get_news_argentina():
         return []
 
 def get_news_world():
-    """Obtiene las 3 noticias más importantes del mundo (excluyendo Argentina)"""
+    """Obtiene las noticias más importantes del mundo con links"""
     try:
-        # Usar sección de noticias internacionales
         url = "https://news.google.com/rss/topics/CAAqJggKIiBDQkFTRWdvSUwyMHZNRFp1ZEdvU0FtVnpHZ0pCVWlnQVAB?hl=es-419&gl=AR&ceid=AR:es-419"
         response = requests.get(url, timeout=10)
 
@@ -1122,12 +1470,14 @@ def get_news_world():
             if len(news) >= 3:
                 break
             title = item.find("title").text
+            link = item.find("link").text
             # Filtrar noticias de Argentina
             if any(kw in title.lower() for kw in keywords_argentina):
                 continue
             if " - " in title:
                 title = title.rsplit(" - ", 1)[0]
-            news.append(title)
+            short_link = shorten_url(link)
+            news.append({"title": title, "link": short_link})
 
         return news
     except Exception as e:
@@ -1228,7 +1578,7 @@ def get_cuarteto_events():
         print(f"Error obteniendo info de cuarteto: {e}")
         return ""
 
-def format_news():
+def format_news(include_links=True):
     """Formatea las noticias para mostrar"""
     result = ""
 
@@ -1237,7 +1587,12 @@ def format_news():
     if news_ar:
         result += "🇦🇷 *Noticias de Argentina:*\n"
         for i, news in enumerate(news_ar, 1):
-            result += f"  {i}. {news}\n"
+            if isinstance(news, dict):
+                result += f"  {i}. {news['title']}\n"
+                if include_links:
+                    result += f"     📎 {news['link']}\n"
+            else:
+                result += f"  {i}. {news}\n"
         result += "\n"
 
     # Noticias del mundo
@@ -1245,7 +1600,12 @@ def format_news():
     if news_world:
         result += "🌍 *Noticias del Mundo:*\n"
         for i, news in enumerate(news_world, 1):
-            result += f"  {i}. {news}\n"
+            if isinstance(news, dict):
+                result += f"  {i}. {news['title']}\n"
+                if include_links:
+                    result += f"     📎 {news['link']}\n"
+            else:
+                result += f"  {i}. {news}\n"
 
     if not result:
         result = "No pude obtener las noticias en este momento."
@@ -1942,28 +2302,100 @@ def is_new_user(user_id):
     conversation = get_conversation(user_id)
     return len(conversation) == 0
 
-def get_welcome_message_short():
-    """Mensaje de bienvenida corto para adultos mayores"""
+def get_profile_selection_message():
+    """Mensaje para seleccionar perfil de usuario"""
     return """¡Hola! 👋 Soy tu *Asistente Personal*.
 
-Puedo ayudarte con:
-• 💊 *Medicamentos* - te recuerdo tomarlos
-• 🌤 *Clima* - escribí "clima"
-• 📋 *Tareas* - escribí "mis tareas"
-• 🆘 *Ayuda* - escribí "ayuda" si necesitás asistencia
+Para personalizar tu experiencia, decime:
 
-📖 Escribí *"menú"* para ver todo lo que puedo hacer.
+👴 *"Soy adulto mayor"* - Modo simplificado con:
+   • Recordatorios de medicamentos
+   • Chequeo de bienestar diario
+   • Recordatorio de hidratación
+   • Alertas a tu cuidador
+   • Menú simple y claro
 
-¿En qué te puedo ayudar?"""
+👤 *"Soy joven"* - Modo completo con:
+   • Todas las funciones disponibles
+   • Tareas, notas, gastos
+   • Noticias, dólar, clima
+   • Sin recordatorios automáticos
 
-def get_welcome_message():
-    """Mensaje completo con todas las funcionalidades"""
+¿Cuál preferís?"""
+
+def get_welcome_message_adulto_mayor(name=None):
+    """Mensaje de bienvenida para adultos mayores"""
+    greeting = f"¡Hola{', ' + name if name else ''}!" if name else "¡Hola!"
+    return f"""{greeting} 👋
+
+Tu asistente está listo. Puedo ayudarte con:
+
+💊 *Medicamentos* - te voy a recordar tomarlos
+💧 *Hidratación* - te aviso cuando tomar agua
+🌤 *Clima* - escribí "clima"
+🆘 *Ayuda* - escribí "ayuda" si necesitás asistencia
+
+📖 Escribí *"menú"* para ver más opciones.
+
+*Importante:* Configurá tu cuidador escribiendo:
+👉 *mi cuidador es +54XXXXXXXXXX*"""
+
+def get_welcome_message_joven():
+    """Mensaje de bienvenida para jóvenes"""
+    return """¡Hola! 👋 Soy tu *Asistente Personal*.
+
+Tenés acceso a todas las funciones:
+📋 Tareas y notas
+💰 Control de gastos
+📰 Noticias con links
+🌤 Clima y dólar
+⏰ Recordatorios
+🎤 Mensajes de voz
+
+📖 Escribí *"menú"* para ver todo lo que puedo hacer."""
+
+def get_welcome_message_short():
+    """Mensaje de bienvenida corto según perfil"""
+    return """👋 ¡Hola!
+
+Escribí *"menú"* para ver qué puedo hacer por vos.
+
+🆘 Si necesitás ayuda urgente, escribí *"ayuda"*."""
+
+def get_menu_adulto_mayor():
+    """Menú simplificado para adultos mayores"""
+    return """📖 *MENÚ*
+
+💊 *MEDICAMENTOS*
+• "tomo [nombre]" - agregar
+• "mis medicamentos" - ver lista
+• Respondé "sí" o "tomé" cuando te pregunte
+
+🌤 *CLIMA*
+• Escribí "clima"
+
+🆘 *EMERGENCIA*
+• "ayuda" - alertar a tu cuidador
+• "mi cuidador es +54..." - configurar
+
+📋 *TAREAS*
+• "agregar tarea: ..."
+• "mis tareas"
+
+🎤 *También podés enviar audios*
+
+⚙️ *Configuración*
+• "desactivar hidratación"
+• "desactivar bienestar"
+• "agregar cuidador +54..." (secundario)"""
+
+def get_menu_joven():
+    """Menú completo para jóvenes"""
     return """📖 *MENÚ COMPLETO*
 
 📋 *TAREAS*
 • "agregar tarea: comprar leche"
-• "mis tareas"
-• "completar tarea 1"
+• "mis tareas" / "completar tarea 1"
 
 📝 *NOTAS*
 • "guardar nota: cumple de mamá 15/3"
@@ -1971,7 +2403,7 @@ def get_welcome_message():
 
 💰 *GASTOS*
 • "gasté 5000 en supermercado"
-• "mis gastos"
+• "mis gastos" / "análisis de gastos"
 
 🛒 *LISTA DE COMPRAS*
 • "agregar a compras: pan, leche"
@@ -1981,23 +2413,103 @@ def get_welcome_message():
 • "recordame en 2 horas llamar al médico"
 
 💊 *MEDICAMENTOS*
-• "tomo ibuprofeno" - agregar medicamento
-• "mis medicamentos" - ver lista
-• Cuando te pregunte si tomaste, respondé "sí" o "tomé"
+• "tomo ibuprofeno"
+• "mis medicamentos"
 
-🌤 *INFO ÚTIL*
-• "clima" - pronóstico del tiempo
-• "dólar" - cotización del dólar
-• "buen día" - resumen del día
+🌤 *INFO*
+• "clima" / "dólar" / "noticias"
+• "buen día" - resumen completo
 
 🆘 *EMERGENCIA*
-• "mi cuidador es +54XXXXXXXXXX" - configurar
-• "ayuda" - alertar a tu cuidador
+• "mi cuidador es +54..." - configurar
+• "ayuda" - alertar cuidador
 
 🎤 También podés enviarme *audios*."""
 
+def get_welcome_message():
+    """Mensaje completo por defecto (compatibilidad)"""
+    return get_menu_joven()
+
+# ==================== HISTORIAL SEMANAL PARA CUIDADOR ====================
+
+def generate_weekly_report(user_id):
+    """Genera reporte semanal de un usuario para el cuidador"""
+    now = datetime.now(TIMEZONE)
+    week_ago = now - timedelta(days=7)
+
+    profile = get_user_profile(user_id)
+    user_display = user_id.replace('whatsapp:', '')
+    name = profile.get("name", "") if profile else ""
+
+    report = f"📊 *Reporte Semanal*\n"
+    report += f"👤 {name or user_display}\n"
+    report += f"📅 {week_ago.strftime('%d/%m')} al {now.strftime('%d/%m/%Y')}\n\n"
+
+    # Medicamentos
+    meds = load_medications()
+    if user_id in meds:
+        med_log = meds[user_id].get("log", [])
+        week_log = [e for e in med_log if e.get("date", "") >= week_ago.strftime("%Y-%m-%d")]
+
+        total_expected = 14  # 2 por día x 7 días
+        total_taken = len(week_log)
+        percent = (total_taken / total_expected * 100) if total_expected > 0 else 0
+
+        report += f"💊 *Medicamentos:*\n"
+        report += f"   Tomados: {total_taken}/{total_expected} ({percent:.0f}%)\n\n"
+
+    # Actividad
+    activity = load_user_activity()
+    if user_id in activity:
+        daily = activity[user_id].get("daily_messages", {})
+        week_messages = sum(v for k, v in daily.items() if k >= week_ago.strftime("%Y-%m-%d"))
+        avg_daily = week_messages / 7 if week_messages > 0 else 0
+
+        report += f"📱 *Actividad:*\n"
+        report += f"   Mensajes: {week_messages} (promedio {avg_daily:.1f}/día)\n\n"
+
+    # Bienestar
+    checks = load_wellness_checks()
+    if user_id in checks:
+        check = checks[user_id]
+        if check.get("response"):
+            report += f"😊 *Último bienestar:* {check.get('response', 'N/A')}\n\n"
+
+    # Alertas
+    report += "⚠️ *Alertas de la semana:*\n"
+    # Aquí podrías agregar un log de alertas si lo implementas
+
+    report += "\n_Reporte generado automáticamente_"
+
+    return report
+
+def send_weekly_reports():
+    """Envía reportes semanales a los cuidadores"""
+    print(f"[{datetime.now()}] Enviando reportes semanales...")
+
+    profiles = load_user_profiles()
+    caregivers_data = load_caregivers()
+
+    for user_id, profile in profiles.items():
+        if profile.get("type") != "adulto_mayor":
+            continue
+
+        caregiver = get_caregiver(user_id)
+        if not caregiver:
+            continue
+
+        try:
+            report = generate_weekly_report(user_id)
+            send_whatsapp_message(caregiver, report)
+            print(f"Reporte semanal enviado al cuidador de {user_id}")
+        except Exception as e:
+            print(f"Error enviando reporte semanal: {e}")
+
 def get_ai_response(user_message, user_id):
     """Obtiene respuesta de Claude"""
+    # Registrar actividad del usuario
+    record_user_activity(user_id)
+
     # Verificar si es usuario nuevo
     is_first_message = is_new_user(user_id)
 
@@ -2008,22 +2520,110 @@ def get_ai_response(user_message, user_id):
     add_to_conversation(user_id, "user", user_message)
     conversation.append({"role": "user", "content": user_message})
 
-    # Si es usuario nuevo y dice hola/buen día, mostrar bienvenida corta
-    greeting_words = ["hola", "buenas", "buen dia", "buen día", "buenos dias", "buenos días", "hey", "hello", "hi", "que tal", "qué tal"]
-    if is_first_message and any(word in user_message.lower() for word in greeting_words):
-        welcome = get_welcome_message_short()
-        add_to_conversation(user_id, "assistant", welcome)
-        return welcome
+    msg_lower = user_message.lower().strip()
 
-    # Si dice "menú", mostrar el menú completo
+    # Si el usuario no tiene perfil configurado
+    if not is_profile_configured(user_id):
+        # Verificar si está seleccionando perfil
+        if "adulto mayor" in msg_lower or "soy mayor" in msg_lower or "soy adulto" in msg_lower:
+            # Preguntar nombre
+            set_user_profile(user_id, "adulto_mayor")
+            response = "✅ Perfil configurado: *Adulto Mayor*\n\n¿Cómo te llamás? (así te puedo saludar por tu nombre)\n\nO escribí *saltar* si preferís no decirme."
+            add_to_conversation(user_id, "assistant", response)
+            return response
+
+        elif "joven" in msg_lower or "soy joven" in msg_lower or "modo completo" in msg_lower:
+            set_user_profile(user_id, "joven")
+            response = get_welcome_message_joven()
+            add_to_conversation(user_id, "assistant", response)
+            return response
+
+        elif "saltar" in msg_lower or "no" == msg_lower:
+            # Ya tiene perfil pero no quiso dar nombre
+            profile = get_user_profile(user_id)
+            if profile and profile.get("type") == "adulto_mayor":
+                response = get_welcome_message_adulto_mayor()
+                add_to_conversation(user_id, "assistant", response)
+                return response
+
+        elif is_first_message:
+            # Primera vez, mostrar selección de perfil
+            welcome = get_profile_selection_message()
+            add_to_conversation(user_id, "assistant", welcome)
+            return welcome
+
+    # Verificar si acaba de seleccionar perfil adulto mayor y está dando su nombre
+    profile = get_user_profile(user_id)
+    if profile and profile.get("type") == "adulto_mayor" and not profile.get("name"):
+        if msg_lower not in ["saltar", "no", "menu", "menú", "ayuda"]:
+            # Es el nombre
+            name = user_message.strip().title()
+            update_user_profile_setting(user_id, "name", name)
+            response = get_welcome_message_adulto_mayor(name)
+            add_to_conversation(user_id, "assistant", response)
+            return response
+
+    # Si dice "menú", mostrar según perfil
     menu_words = ["menu", "menú", "help", "que podes hacer", "qué podés hacer", "como funciona", "cómo funciona", "funciones", "comandos"]
-    if any(word in user_message.lower() for word in menu_words):
-        full_menu = get_welcome_message()
+    if any(word in msg_lower for word in menu_words):
+        if is_adulto_mayor(user_id):
+            full_menu = get_menu_adulto_mayor()
+        else:
+            full_menu = get_menu_joven()
         add_to_conversation(user_id, "assistant", full_menu)
         return full_menu
 
+    # Respuesta a chequeo de bienestar
+    wellness_responses = ["bien", "mal", "mas o menos", "más o menos", "regular", "excelente", "muy bien", "no muy bien", "cansado", "cansada"]
+    if any(word in msg_lower for word in wellness_responses):
+        pending_wellness = get_wellness_pending(user_id)
+        if pending_wellness and not pending_wellness.get("responded"):
+            mark_wellness_responded(user_id, user_message)
+            if "mal" in msg_lower or "no muy bien" in msg_lower:
+                response = "😔 Lamento escuchar eso. ¿Necesitás que avise a tu cuidador? Escribí *ayuda* si querés.\n\n¿Hay algo que pueda hacer por vos?"
+            else:
+                response = "😊 ¡Me alegro! Que tengas un lindo día. Estoy acá si me necesitás."
+            add_to_conversation(user_id, "assistant", response)
+            return response
+
+    # Configuración de funciones para adulto mayor
+    if is_adulto_mayor(user_id):
+        if "desactivar hidratacion" in msg_lower or "desactivar hidratación" in msg_lower:
+            update_user_profile_setting(user_id, "hydration_enabled", False)
+            response = "✅ Recordatorios de hidratación desactivados."
+            add_to_conversation(user_id, "assistant", response)
+            return response
+
+        if "activar hidratacion" in msg_lower or "activar hidratación" in msg_lower:
+            update_user_profile_setting(user_id, "hydration_enabled", True)
+            response = "✅ Recordatorios de hidratación activados."
+            add_to_conversation(user_id, "assistant", response)
+            return response
+
+        if "desactivar bienestar" in msg_lower:
+            update_user_profile_setting(user_id, "wellness_check_enabled", False)
+            response = "✅ Chequeo de bienestar desactivado."
+            add_to_conversation(user_id, "assistant", response)
+            return response
+
+        if "activar bienestar" in msg_lower:
+            update_user_profile_setting(user_id, "wellness_check_enabled", True)
+            response = "✅ Chequeo de bienestar activado."
+            add_to_conversation(user_id, "assistant", response)
+            return response
+
+    # Agregar cuidador secundario
+    secondary_caregiver_match = re.search(r'agregar cuidador\s*\+?(\d[\d\s\-]+)', msg_lower)
+    if secondary_caregiver_match:
+        number = re.sub(r'[\s\-]', '', secondary_caregiver_match.group(1))
+        if not number.startswith('+'):
+            number = '+' + number
+        set_caregiver(user_id, number, is_primary=False)
+        response = f"✅ Cuidador secundario agregado: {number}"
+        add_to_conversation(user_id, "assistant", response)
+        return response
+
     # Comandos directos que no necesitan pasar por Claude
-    msg_lower = user_message.lower().strip()
 
     # Configurar cuidador: "mi cuidador es +54..." o "cuidador: +54..."
     caregiver_match = re.search(r'(?:mi cuidador es|cuidador:|configurar cuidador)\s*\+?(\d[\d\s\-]+)', user_message.lower())
@@ -2411,7 +3011,17 @@ scheduler.add_job(check_and_send_custom_reminders, "interval", minutes=1)
 scheduler.add_job(check_and_send_caregiver_reminders, "interval", minutes=1)
 # Verificar confirmaciones de medicamentos cada minuto
 scheduler.add_job(check_medication_confirmations, "interval", minutes=1)
-# Resumen matutino a las 8:00 AM
+# Verificar respuestas de bienestar cada 5 minutos
+scheduler.add_job(check_wellness_responses, "interval", minutes=5)
+# Verificar inactividad inusual a las 6PM
+scheduler.add_job(check_user_inactivity, "cron", hour=18, minute=0)
+# Chequeo de bienestar a las 9:00 AM (solo adultos mayores)
+scheduler.add_job(send_wellness_check, "cron", hour=9, minute=0)
+# Recordatorio de hidratación cada 3 horas (10AM, 1PM, 4PM)
+scheduler.add_job(send_hydration_reminder, "cron", hour=10, minute=0)
+scheduler.add_job(send_hydration_reminder, "cron", hour=13, minute=0)
+scheduler.add_job(send_hydration_reminder, "cron", hour=16, minute=0)
+# Resumen matutino a las 8:45 AM
 scheduler.add_job(send_morning_summary, "cron", hour=8, minute=45)
 # Recordatorio de medicamentos a las 10:00 AM
 scheduler.add_job(lambda: send_medication_reminder("mañana"), "cron", hour=10, minute=0)
@@ -2419,6 +3029,8 @@ scheduler.add_job(lambda: send_medication_reminder("mañana"), "cron", hour=10, 
 scheduler.add_job(lambda: send_medication_reminder("noche"), "cron", hour=21, minute=0)
 # Reporte diario de medicamentos al cuidador a las 22:00
 scheduler.add_job(send_daily_medication_report, "cron", hour=22, minute=0)
+# Reporte semanal los domingos a las 20:00
+scheduler.add_job(send_weekly_reports, "cron", day_of_week="sun", hour=20, minute=0)
 scheduler.start()
 
 if __name__ == "__main__":
