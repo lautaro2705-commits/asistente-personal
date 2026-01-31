@@ -2316,9 +2316,9 @@ Puedo ayudarte con:
 • 🌤 Clima y dólar
 • 🆘 Alertas de ayuda
 
-📖 Escribí *"menú"* para ver todo lo que puedo hacer.
+🎤 Podés escribirme o enviarme *mensajes de voz*.
 
-🎤 También podés enviarme *audios*."""
+📖 Escribí *"menú"* para ver todas las funciones."""
 
 def get_welcome_message():
     """Menú completo con todas las funciones"""
@@ -2360,7 +2360,7 @@ def get_welcome_message():
 • "agregar cuidador +54..." - secundario
 • "ayuda" - alertar a tus cuidadores
 
-🎤 También podés enviarme *audios*."""
+🎤 *Podés enviarme mensajes de voz* y los entiendo perfectamente."""
 
 # ==================== HISTORIAL SEMANAL PARA CUIDADOR ====================
 
