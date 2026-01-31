@@ -172,29 +172,30 @@ def mark_wellness_responded(user_id, response):
         save_wellness_checks(checks)
 
 def send_wellness_check():
-    """Envía chequeo de bienestar a adultos mayores"""
+    """Envía chequeo de bienestar a usuarios que tienen cuidador"""
     print(f"[{datetime.now()}] Enviando chequeos de bienestar...")
 
-    profiles = load_user_profiles()
+    caregivers = load_caregivers()
 
-    for user_id, profile in profiles.items():
-        if profile.get("type") == "adulto_mayor" and profile.get("wellness_check_enabled", True):
-            # Verificar si ya respondió hoy
-            pending = get_wellness_pending(user_id)
-            if pending and pending.get("responded"):
-                continue
+    for user_id in caregivers.keys():
+        # Solo enviar a usuarios que tienen cuidador configurado
+        caregiver = get_caregiver(user_id)
+        if not caregiver:
+            continue
 
-            name = profile.get("name", "")
-            greeting = f"¡Buen día{', ' + name if name else ''}! ☀️"
+        # Verificar si ya respondió hoy
+        pending = get_wellness_pending(user_id)
+        if pending and pending.get("responded"):
+            continue
 
-            message = f"{greeting}\n\n¿Cómo te sentís hoy?\n\n👍 Respondé *bien*, *mal* o contame cómo estás."
+        message = "¡Buen día! ☀️\n\n¿Cómo te sentís hoy?\n\n👍 Respondé *bien*, *mal* o contame cómo estás."
 
-            try:
-                send_whatsapp_message(user_id, message)
-                set_wellness_pending(user_id)
-                print(f"Chequeo de bienestar enviado a {user_id}")
-            except Exception as e:
-                print(f"Error enviando chequeo: {e}")
+        try:
+            send_whatsapp_message(user_id, message)
+            set_wellness_pending(user_id)
+            print(f"Chequeo de bienestar enviado a {user_id}")
+        except Exception as e:
+            print(f"Error enviando chequeo: {e}")
 
 def check_wellness_responses():
     """Verifica respuestas a chequeos de bienestar y alerta si no respondió"""
@@ -284,7 +285,7 @@ def check_user_inactivity():
     """Verifica inactividad inusual y alerta al cuidador"""
     print(f"[{datetime.now()}] Verificando inactividad de usuarios...")
 
-    profiles = load_user_profiles()
+    caregivers = load_caregivers()
     activity = load_user_activity()
     now = datetime.now(TIMEZONE)
     today = now.strftime("%Y-%m-%d")
@@ -293,10 +294,9 @@ def check_user_inactivity():
     if now.hour < 18:
         return
 
-    for user_id, profile in profiles.items():
-        if profile.get("type") != "adulto_mayor":
-            continue
-        if not profile.get("inactivity_alert_enabled", True):
+    for user_id in caregivers.keys():
+        caregiver = get_caregiver(user_id)
+        if not caregiver:
             continue
 
         user_activity = activity.get(user_id, {})
@@ -310,43 +310,47 @@ def check_user_inactivity():
             if user_activity.get("inactivity_alert_date") == today:
                 continue
 
-            caregiver = get_caregiver(user_id)
-            if caregiver:
-                user_display = user_id.replace('whatsapp:', '')
-                alert_msg = f"⚠️ *Alerta de inactividad*\n\n{user_display} no ha enviado mensajes hoy.\n\nPromedio habitual: {avg:.0f} mensajes/día\n📅 {now.strftime('%d/%m/%Y %H:%M')}"
+            user_display = user_id.replace('whatsapp:', '')
+            alert_msg = f"⚠️ *Alerta de inactividad*\n\n{user_display} no ha enviado mensajes hoy.\n\nPromedio habitual: {avg:.0f} mensajes/día\n📅 {now.strftime('%d/%m/%Y %H:%M')}"
 
-                try:
-                    send_whatsapp_message(caregiver, alert_msg)
-                    activity[user_id]["inactivity_alert_date"] = today
-                    save_user_activity(activity)
-                    print(f"Alerta de inactividad enviada al cuidador de {user_id}")
-                except Exception as e:
-                    print(f"Error enviando alerta de inactividad: {e}")
+            try:
+                send_whatsapp_message(caregiver, alert_msg)
+                if user_id not in activity:
+                    activity[user_id] = {"daily_messages": {}}
+                activity[user_id]["inactivity_alert_date"] = today
+                save_user_activity(activity)
+                print(f"Alerta de inactividad enviada al cuidador de {user_id}")
+            except Exception as e:
+                print(f"Error enviando alerta de inactividad: {e}")
 
 # ==================== RECORDATORIO DE HIDRATACIÓN ====================
 
 def send_hydration_reminder():
-    """Envía recordatorio de hidratación a adultos mayores"""
+    """Envía recordatorio de hidratación a usuarios con cuidador"""
     print(f"[{datetime.now()}] Enviando recordatorios de hidratación...")
 
-    profiles = load_user_profiles()
+    caregivers = load_caregivers()
 
-    for user_id, profile in profiles.items():
-        if profile.get("type") == "adulto_mayor" and profile.get("hydration_enabled", True):
-            messages = [
-                "💧 ¡Recordatorio! ¿Tomaste agua? Mantenerse hidratado es importante.",
-                "💧 ¿Ya tomaste un vaso de agua? ¡Tu cuerpo lo agradece!",
-                "💧 Momento de hidratarse. ¿Tomaste agua recientemente?",
-                "💧 ¡No te olvides de tomar agua! Es bueno para tu salud."
-            ]
-            import random
-            message = random.choice(messages)
+    for user_id in caregivers.keys():
+        # Solo enviar a usuarios que tienen cuidador
+        caregiver = get_caregiver(user_id)
+        if not caregiver:
+            continue
 
-            try:
-                send_whatsapp_message(user_id, message)
-                print(f"Recordatorio de hidratación enviado a {user_id}")
-            except Exception as e:
-                print(f"Error enviando recordatorio de hidratación: {e}")
+        messages = [
+            "💧 ¡Recordatorio! ¿Tomaste agua? Mantenerse hidratado es importante.",
+            "💧 ¿Ya tomaste un vaso de agua? ¡Tu cuerpo lo agradece!",
+            "💧 Momento de hidratarse. ¿Tomaste agua recientemente?",
+            "💧 ¡No te olvides de tomar agua! Es bueno para tu salud."
+        ]
+        import random
+        message = random.choice(messages)
+
+        try:
+            send_whatsapp_message(user_id, message)
+            print(f"Recordatorio de hidratación enviado a {user_id}")
+        except Exception as e:
+            print(f"Error enviando recordatorio de hidratación: {e}")
 
 # ==================== HISTORIAL DE CONVERSACIONES ====================
 
@@ -2302,100 +2306,33 @@ def is_new_user(user_id):
     conversation = get_conversation(user_id)
     return len(conversation) == 0
 
-def get_profile_selection_message():
-    """Mensaje para seleccionar perfil de usuario"""
-    return """¡Hola! 👋 Soy tu *Asistente Personal*.
-
-Para personalizar tu experiencia, decime:
-
-👴 *"Soy adulto mayor"* - Modo simplificado con:
-   • Recordatorios de medicamentos
-   • Chequeo de bienestar diario
-   • Recordatorio de hidratación
-   • Alertas a tu cuidador
-   • Menú simple y claro
-
-👤 *"Soy joven"* - Modo completo con:
-   • Todas las funciones disponibles
-   • Tareas, notas, gastos
-   • Noticias, dólar, clima
-   • Sin recordatorios automáticos
-
-¿Cuál preferís?"""
-
-def get_welcome_message_adulto_mayor(name=None):
-    """Mensaje de bienvenida para adultos mayores"""
-    greeting = f"¡Hola{', ' + name if name else ''}!" if name else "¡Hola!"
-    return f"""{greeting} 👋
-
-Tu asistente está listo. Puedo ayudarte con:
-
-💊 *Medicamentos* - te voy a recordar tomarlos
-💧 *Hidratación* - te aviso cuando tomar agua
-🌤 *Clima* - escribí "clima"
-🆘 *Ayuda* - escribí "ayuda" si necesitás asistencia
-
-📖 Escribí *"menú"* para ver más opciones.
-
-*Importante:* Configurá tu cuidador escribiendo:
-👉 *mi cuidador es +54XXXXXXXXXX*"""
-
-def get_welcome_message_joven():
-    """Mensaje de bienvenida para jóvenes"""
-    return """¡Hola! 👋 Soy tu *Asistente Personal*.
-
-Tenés acceso a todas las funciones:
-📋 Tareas y notas
-💰 Control de gastos
-📰 Noticias con links
-🌤 Clima y dólar
-⏰ Recordatorios
-🎤 Mensajes de voz
-
-📖 Escribí *"menú"* para ver todo lo que puedo hacer."""
-
 def get_welcome_message_short():
-    """Mensaje de bienvenida corto según perfil"""
-    return """👋 ¡Hola!
+    """Mensaje de bienvenida simple para todos"""
+    return """¡Hola! 👋 Soy tu *Asistente Personal*.
 
-Escribí *"menú"* para ver qué puedo hacer por vos.
+Puedo ayudarte con:
+• 💊 Medicamentos
+• 📋 Tareas y notas
+• 🌤 Clima y dólar
+• 🆘 Alertas de ayuda
 
-🆘 Si necesitás ayuda urgente, escribí *"ayuda"*."""
+📖 Escribí *"menú"* para ver todo lo que puedo hacer.
 
-def get_menu_adulto_mayor():
-    """Menú simplificado para adultos mayores"""
-    return """📖 *MENÚ*
+🎤 También podés enviarme *audios*."""
+
+def get_welcome_message():
+    """Menú completo con todas las funciones"""
+    return """📖 *MENÚ COMPLETO*
 
 💊 *MEDICAMENTOS*
-• "tomo [nombre]" - agregar
+• "tomo ibuprofeno" - agregar
 • "mis medicamentos" - ver lista
-• Respondé "sí" o "tomé" cuando te pregunte
-
-🌤 *CLIMA*
-• Escribí "clima"
-
-🆘 *EMERGENCIA*
-• "ayuda" - alertar a tu cuidador
-• "mi cuidador es +54..." - configurar
-
-📋 *TAREAS*
-• "agregar tarea: ..."
-• "mis tareas"
-
-🎤 *También podés enviar audios*
-
-⚙️ *Configuración*
-• "desactivar hidratación"
-• "desactivar bienestar"
-• "agregar cuidador +54..." (secundario)"""
-
-def get_menu_joven():
-    """Menú completo para jóvenes"""
-    return """📖 *MENÚ COMPLETO*
+• Respondé "sí" cuando te pregunte si tomaste
 
 📋 *TAREAS*
 • "agregar tarea: comprar leche"
-• "mis tareas" / "completar tarea 1"
+• "mis tareas"
+• "completar tarea 1"
 
 📝 *NOTAS*
 • "guardar nota: cumple de mamá 15/3"
@@ -2403,32 +2340,27 @@ def get_menu_joven():
 
 💰 *GASTOS*
 • "gasté 5000 en supermercado"
-• "mis gastos" / "análisis de gastos"
+• "mis gastos"
 
-🛒 *LISTA DE COMPRAS*
+🛒 *COMPRAS*
 • "agregar a compras: pan, leche"
 • "lista de compras"
 
 ⏰ *RECORDATORIOS*
 • "recordame en 2 horas llamar al médico"
 
-💊 *MEDICAMENTOS*
-• "tomo ibuprofeno"
-• "mis medicamentos"
-
-🌤 *INFO*
-• "clima" / "dólar" / "noticias"
+🌤 *INFO ÚTIL*
+• "clima" - pronóstico
+• "dólar" - cotización
+• "noticias" - titulares con links
 • "buen día" - resumen completo
 
 🆘 *EMERGENCIA*
 • "mi cuidador es +54..." - configurar
-• "ayuda" - alertar cuidador
+• "agregar cuidador +54..." - secundario
+• "ayuda" - alertar a tus cuidadores
 
 🎤 También podés enviarme *audios*."""
-
-def get_welcome_message():
-    """Mensaje completo por defecto (compatibilidad)"""
-    return get_menu_joven()
 
 # ==================== HISTORIAL SEMANAL PARA CUIDADOR ====================
 
@@ -2437,12 +2369,10 @@ def generate_weekly_report(user_id):
     now = datetime.now(TIMEZONE)
     week_ago = now - timedelta(days=7)
 
-    profile = get_user_profile(user_id)
     user_display = user_id.replace('whatsapp:', '')
-    name = profile.get("name", "") if profile else ""
 
     report = f"📊 *Reporte Semanal*\n"
-    report += f"👤 {name or user_display}\n"
+    report += f"👤 {user_display}\n"
     report += f"📅 {week_ago.strftime('%d/%m')} al {now.strftime('%d/%m/%Y')}\n\n"
 
     # Medicamentos
@@ -2487,13 +2417,9 @@ def send_weekly_reports():
     """Envía reportes semanales a los cuidadores"""
     print(f"[{datetime.now()}] Enviando reportes semanales...")
 
-    profiles = load_user_profiles()
-    caregivers_data = load_caregivers()
+    caregivers = load_caregivers()
 
-    for user_id, profile in profiles.items():
-        if profile.get("type") != "adulto_mayor":
-            continue
-
+    for user_id in caregivers.keys():
         caregiver = get_caregiver(user_id)
         if not caregiver:
             continue
@@ -2522,54 +2448,17 @@ def get_ai_response(user_message, user_id):
 
     msg_lower = user_message.lower().strip()
 
-    # Si el usuario no tiene perfil configurado
-    if not is_profile_configured(user_id):
-        # Verificar si está seleccionando perfil
-        if "adulto mayor" in msg_lower or "soy mayor" in msg_lower or "soy adulto" in msg_lower:
-            # Preguntar nombre
-            set_user_profile(user_id, "adulto_mayor")
-            response = "✅ Perfil configurado: *Adulto Mayor*\n\n¿Cómo te llamás? (así te puedo saludar por tu nombre)\n\nO escribí *saltar* si preferís no decirme."
-            add_to_conversation(user_id, "assistant", response)
-            return response
+    # Si es usuario nuevo y saluda, mostrar bienvenida
+    greeting_words = ["hola", "buenas", "buen dia", "buen día", "buenos dias", "buenos días", "hey", "hello", "hi", "que tal", "qué tal"]
+    if is_first_message and any(word in msg_lower for word in greeting_words):
+        welcome = get_welcome_message_short()
+        add_to_conversation(user_id, "assistant", welcome)
+        return welcome
 
-        elif "joven" in msg_lower or "soy joven" in msg_lower or "modo completo" in msg_lower:
-            set_user_profile(user_id, "joven")
-            response = get_welcome_message_joven()
-            add_to_conversation(user_id, "assistant", response)
-            return response
-
-        elif "saltar" in msg_lower or "no" == msg_lower:
-            # Ya tiene perfil pero no quiso dar nombre
-            profile = get_user_profile(user_id)
-            if profile and profile.get("type") == "adulto_mayor":
-                response = get_welcome_message_adulto_mayor()
-                add_to_conversation(user_id, "assistant", response)
-                return response
-
-        elif is_first_message:
-            # Primera vez, mostrar selección de perfil
-            welcome = get_profile_selection_message()
-            add_to_conversation(user_id, "assistant", welcome)
-            return welcome
-
-    # Verificar si acaba de seleccionar perfil adulto mayor y está dando su nombre
-    profile = get_user_profile(user_id)
-    if profile and profile.get("type") == "adulto_mayor" and not profile.get("name"):
-        if msg_lower not in ["saltar", "no", "menu", "menú", "ayuda"]:
-            # Es el nombre
-            name = user_message.strip().title()
-            update_user_profile_setting(user_id, "name", name)
-            response = get_welcome_message_adulto_mayor(name)
-            add_to_conversation(user_id, "assistant", response)
-            return response
-
-    # Si dice "menú", mostrar según perfil
+    # Si dice "menú", mostrar menú completo
     menu_words = ["menu", "menú", "help", "que podes hacer", "qué podés hacer", "como funciona", "cómo funciona", "funciones", "comandos"]
     if any(word in msg_lower for word in menu_words):
-        if is_adulto_mayor(user_id):
-            full_menu = get_menu_adulto_mayor()
-        else:
-            full_menu = get_menu_joven()
+        full_menu = get_welcome_message()
         add_to_conversation(user_id, "assistant", full_menu)
         return full_menu
 
@@ -2583,32 +2472,6 @@ def get_ai_response(user_message, user_id):
                 response = "😔 Lamento escuchar eso. ¿Necesitás que avise a tu cuidador? Escribí *ayuda* si querés.\n\n¿Hay algo que pueda hacer por vos?"
             else:
                 response = "😊 ¡Me alegro! Que tengas un lindo día. Estoy acá si me necesitás."
-            add_to_conversation(user_id, "assistant", response)
-            return response
-
-    # Configuración de funciones para adulto mayor
-    if is_adulto_mayor(user_id):
-        if "desactivar hidratacion" in msg_lower or "desactivar hidratación" in msg_lower:
-            update_user_profile_setting(user_id, "hydration_enabled", False)
-            response = "✅ Recordatorios de hidratación desactivados."
-            add_to_conversation(user_id, "assistant", response)
-            return response
-
-        if "activar hidratacion" in msg_lower or "activar hidratación" in msg_lower:
-            update_user_profile_setting(user_id, "hydration_enabled", True)
-            response = "✅ Recordatorios de hidratación activados."
-            add_to_conversation(user_id, "assistant", response)
-            return response
-
-        if "desactivar bienestar" in msg_lower:
-            update_user_profile_setting(user_id, "wellness_check_enabled", False)
-            response = "✅ Chequeo de bienestar desactivado."
-            add_to_conversation(user_id, "assistant", response)
-            return response
-
-        if "activar bienestar" in msg_lower:
-            update_user_profile_setting(user_id, "wellness_check_enabled", True)
-            response = "✅ Chequeo de bienestar activado."
             add_to_conversation(user_id, "assistant", response)
             return response
 
