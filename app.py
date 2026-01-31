@@ -66,6 +66,9 @@ registered_users = {}
 # Zona horaria
 TIMEZONE = pytz.timezone("America/Argentina/Buenos_Aires")
 
+# Archivo para guardar cuidadores de cada usuario
+CAREGIVERS_FILE = os.path.join(DATA_DIR, "caregivers.json")
+
 # Archivos de datos
 DATA_DIR = os.path.dirname(os.path.abspath(__file__))
 TASKS_FILE = os.path.join(DATA_DIR, "tasks.json")
@@ -679,6 +682,37 @@ def get_user_location(user_id):
     """Obtiene la ubicación del usuario"""
     locations = load_locations()
     return locations.get(user_id, "Cordoba,Argentina")
+
+# ==================== CUIDADORES ====================
+
+def load_caregivers():
+    """Carga los cuidadores desde archivo"""
+    if os.path.exists(CAREGIVERS_FILE):
+        try:
+            with open(CAREGIVERS_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_caregivers(caregivers):
+    """Guarda los cuidadores"""
+    with open(CAREGIVERS_FILE, "w") as f:
+        json.dump(caregivers, f, ensure_ascii=False)
+
+def set_caregiver(user_id, caregiver_number):
+    """Guarda el cuidador de un usuario"""
+    caregivers = load_caregivers()
+    # Asegurar formato whatsapp:+número
+    if not caregiver_number.startswith("whatsapp:"):
+        caregiver_number = f"whatsapp:{caregiver_number}"
+    caregivers[user_id] = caregiver_number
+    save_caregivers(caregivers)
+
+def get_caregiver(user_id):
+    """Obtiene el cuidador de un usuario"""
+    caregivers = load_caregivers()
+    return caregivers.get(user_id, None)
 
 # ==================== DÓLAR ====================
 
@@ -1707,7 +1741,13 @@ Estoy acá para ayudarte a organizar tu día a día. Esto es lo que puedo hacer:
 
 🎤 *También podés enviarme audios* y los entiendo perfectamente.
 
-¿En qué te puedo ayudar?"""
+🆘 *EMERGENCIA*
+• "mi cuidador es +54XXXXXXXXXX" - configurar cuidador
+• "ayuda" - enviar alerta a tu cuidador
+
+📋 Escribí "menú" en cualquier momento para ver estas opciones.
+
+¿En qué te puedo asistir?"""
 
 def get_ai_response(user_message, user_id):
     """Obtiene respuesta de Claude"""
@@ -1728,15 +1768,64 @@ def get_ai_response(user_message, user_id):
         add_to_conversation(user_id, "assistant", welcome)
         return welcome
 
-    # Si dice "ayuda", mostrar siempre el mensaje de funcionalidades
-    help_words = ["ayuda", "help", "que podes hacer", "qué podés hacer", "como funciona", "cómo funciona", "funciones", "comandos"]
-    if any(word in user_message.lower() for word in help_words):
+    # Si dice "menú", mostrar las funcionalidades
+    menu_words = ["menu", "menú", "help", "que podes hacer", "qué podés hacer", "como funciona", "cómo funciona", "funciones", "comandos"]
+    if any(word in user_message.lower() for word in menu_words):
         welcome = get_welcome_message()
         add_to_conversation(user_id, "assistant", welcome)
         return welcome
 
     # Comandos directos que no necesitan pasar por Claude
     msg_lower = user_message.lower().strip()
+
+    # Configurar cuidador: "mi cuidador es +54..." o "cuidador: +54..."
+    caregiver_match = re.search(r'(?:mi cuidador es|cuidador:|configurar cuidador)\s*\+?(\d[\d\s\-]+)', user_message.lower())
+    if caregiver_match:
+        number = re.sub(r'[\s\-]', '', caregiver_match.group(1))
+        if not number.startswith('+'):
+            number = '+' + number
+        set_caregiver(user_id, number)
+        response_msg = f"✅ Cuidador configurado: {number}\n\nCuando escribas 'ayuda', se le enviará una alerta a este número."
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
+    # Ver cuidador configurado
+    if msg_lower in ["mi cuidador", "quien es mi cuidador", "quién es mi cuidador", "ver cuidador"]:
+        caregiver = get_caregiver(user_id)
+        if caregiver:
+            response_msg = f"👤 Tu cuidador configurado es: {caregiver.replace('whatsapp:', '')}"
+        else:
+            response_msg = "⚠️ No tenés un cuidador configurado.\n\nPara configurarlo, escribí:\n*mi cuidador es +54XXXXXXXXXX*"
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
+    # Si dice "ayuda", enviar alerta al cuidador
+    if msg_lower == "ayuda" or msg_lower == "socorro" or msg_lower == "emergencia":
+        caregiver = get_caregiver(user_id)
+
+        if not caregiver:
+            response_msg = "⚠️ No tenés un cuidador configurado.\n\nPara configurarlo, escribí:\n*mi cuidador es +54XXXXXXXXXX*\n\nUna vez configurado, cuando escribas 'ayuda' se le enviará una alerta."
+            add_to_conversation(user_id, "assistant", response_msg)
+            return response_msg
+
+        # Enviar alerta al cuidador
+        try:
+            now = datetime.now(TIMEZONE)
+            # Extraer número del usuario para mostrarlo más legible
+            user_number_display = user_id.replace('whatsapp:', '')
+            alert_message = f"🚨 *ALERTA DE AYUDA*\n\n{user_number_display} ha pedido ayuda.\n\n📅 Fecha: {now.strftime('%d/%m/%Y')}\n⏰ Hora: {now.strftime('%H:%M')}"
+            send_whatsapp_message(caregiver, alert_message)
+            print(f"Alerta enviada al cuidador: {caregiver}")
+        except Exception as e:
+            print(f"Error enviando alerta al cuidador: {e}")
+            response_msg = "❌ Hubo un error enviando la alerta. Por favor intentá de nuevo o contactá directamente a tu cuidador."
+            add_to_conversation(user_id, "assistant", response_msg)
+            return response_msg
+
+        # Responder al usuario
+        response_msg = "🆘 Tu mensaje de ayuda ha sido enviado a tu cuidador. Pronto se pondrá en contacto contigo.\n\n¿Hay algo más en lo que pueda asistirte mientras tanto?"
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
 
     # Clima directo
     if msg_lower in ["clima", "el clima", "como esta el clima", "cómo está el clima", "que clima hace", "qué clima hace", "tiempo"]:
