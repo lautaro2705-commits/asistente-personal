@@ -882,6 +882,83 @@ def get_caregiver(user_id):
     caregivers = load_caregivers()
     return caregivers.get(user_id, None)
 
+def get_users_for_caregiver(caregiver_id):
+    """Obtiene los usuarios que tienen asignado a este cuidador"""
+    caregivers = load_caregivers()
+    users = []
+    for user_id, cg in caregivers.items():
+        if cg == caregiver_id:
+            users.append(user_id)
+    return users
+
+# Recordatorios programados por el cuidador
+CAREGIVER_REMINDERS_FILE = os.path.join(DATA_DIR, "caregiver_reminders.json")
+
+def load_caregiver_reminders():
+    """Carga recordatorios programados por cuidadores"""
+    if os.path.exists(CAREGIVER_REMINDERS_FILE):
+        try:
+            with open(CAREGIVER_REMINDERS_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return []
+    return []
+
+def save_caregiver_reminders(reminders):
+    """Guarda recordatorios de cuidadores"""
+    with open(CAREGIVER_REMINDERS_FILE, "w") as f:
+        json.dump(reminders, f, ensure_ascii=False)
+
+def add_caregiver_reminder(caregiver_id, target_user_id, message, remind_at):
+    """Agrega un recordatorio del cuidador para un usuario"""
+    reminders = load_caregiver_reminders()
+    reminder = {
+        "id": len(reminders) + 1,
+        "caregiver": caregiver_id,
+        "target_user": target_user_id,
+        "message": message,
+        "remind_at": remind_at,
+        "created": datetime.now(TIMEZONE).isoformat(),
+        "sent": False
+    }
+    reminders.append(reminder)
+    save_caregiver_reminders(reminders)
+    return reminder
+
+def check_and_send_caregiver_reminders():
+    """Revisa y envía recordatorios programados por cuidadores"""
+    reminders = load_caregiver_reminders()
+    now = datetime.now(TIMEZONE)
+    updated = False
+
+    for reminder in reminders:
+        if reminder.get("sent", False):
+            continue
+
+        try:
+            remind_at = datetime.fromisoformat(reminder["remind_at"])
+            if remind_at.tzinfo is None:
+                remind_at = TIMEZONE.localize(remind_at)
+
+            if now >= remind_at:
+                target_user = reminder["target_user"]
+                message = f"📨 *Mensaje de tu cuidador:*\n\n{reminder['message']}"
+
+                send_whatsapp_message(target_user, message)
+                reminder["sent"] = True
+                updated = True
+                print(f"Recordatorio de cuidador enviado a {target_user}: {reminder['message']}")
+        except Exception as e:
+            print(f"Error procesando recordatorio de cuidador: {e}")
+
+    if updated:
+        save_caregiver_reminders(reminders)
+
+def get_pending_caregiver_reminders(caregiver_id):
+    """Obtiene recordatorios pendientes creados por un cuidador"""
+    reminders = load_caregiver_reminders()
+    return [r for r in reminders if r["caregiver"] == caregiver_id and not r.get("sent", False)]
+
 # ==================== DÓLAR ====================
 
 def get_dolar():
@@ -1999,6 +2076,112 @@ def get_ai_response(user_message, user_id):
         add_to_conversation(user_id, "assistant", response_msg)
         return response_msg
 
+    # ========== COMANDOS PARA CUIDADORES ==========
+
+    # Ver usuarios asignados (para cuidadores)
+    if msg_lower in ["mis usuarios", "mis pacientes", "a quien cuido", "a quién cuido"]:
+        users = get_users_for_caregiver(user_id)
+        if users:
+            response_msg = "👥 *Usuarios que te tienen como cuidador:*\n\n"
+            for i, u in enumerate(users, 1):
+                user_display = u.replace('whatsapp:', '')
+                response_msg += f"{i}. {user_display}\n"
+            response_msg += "\n📨 Para enviarles un recordatorio, escribí:\n*recordar a [número]: [mensaje] en [tiempo]*\n\nEjemplo: recordar a +5493511234567: tomá la pastilla en 2 horas"
+        else:
+            response_msg = "👥 No tenés usuarios asignados.\n\nUn usuario te asigna como cuidador escribiendo:\n*mi cuidador es +tu_número*"
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
+    # Programar recordatorio para un usuario (cuidador)
+    # Formato: "recordar a +número: mensaje en X horas/minutos"
+    caregiver_reminder_match = re.search(
+        r'(?:recordar a|recordarle a|avisar a|avisarle a)\s*\+?(\d[\d\s\-]+)[:\s]+(.+?)\s+en\s+(\d+)\s*(hora|horas|minuto|minutos|min|hs|h)',
+        user_message.lower()
+    )
+    if caregiver_reminder_match:
+        target_number = re.sub(r'[\s\-]', '', caregiver_reminder_match.group(1))
+        if not target_number.startswith('+'):
+            target_number = '+' + target_number
+        target_user_id = f"whatsapp:{target_number}"
+
+        message_text = caregiver_reminder_match.group(2).strip()
+        # Capitalizar primera letra del mensaje
+        message_text = message_text[0].upper() + message_text[1:] if message_text else message_text
+
+        time_amount = int(caregiver_reminder_match.group(3))
+        time_unit = caregiver_reminder_match.group(4).lower()
+
+        # Verificar que el usuario tenga a este cuidador asignado
+        users = get_users_for_caregiver(user_id)
+        if target_user_id not in users:
+            response_msg = f"⚠️ El número {target_number} no te tiene asignado como cuidador.\n\nSolo podés enviar recordatorios a usuarios que te hayan configurado como su cuidador."
+            add_to_conversation(user_id, "assistant", response_msg)
+            return response_msg
+
+        # Calcular tiempo
+        now = datetime.now(TIMEZONE)
+        if time_unit.startswith('h'):
+            remind_at = now + timedelta(hours=time_amount)
+        else:
+            remind_at = now + timedelta(minutes=time_amount)
+
+        # Crear recordatorio
+        reminder = add_caregiver_reminder(user_id, target_user_id, message_text, remind_at.isoformat())
+
+        response_msg = f"✅ Recordatorio programado\n\n👤 Para: {target_number}\n📝 Mensaje: {message_text}\n⏰ Se enviará a las {remind_at.strftime('%H:%M')}"
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
+    # Enviar mensaje inmediato a un usuario (cuidador)
+    # Formato: "mensaje a +número: texto" o "decirle a +número: texto"
+    immediate_msg_match = re.search(
+        r'(?:mensaje a|decirle a|enviar a|mandar a)\s*\+?(\d[\d\s\-]+)[:\s]+(.+)',
+        user_message.lower()
+    )
+    if immediate_msg_match:
+        target_number = re.sub(r'[\s\-]', '', immediate_msg_match.group(1))
+        if not target_number.startswith('+'):
+            target_number = '+' + target_number
+        target_user_id = f"whatsapp:{target_number}"
+
+        # Obtener el mensaje original (sin lowercase)
+        original_msg = user_message[immediate_msg_match.start(2):immediate_msg_match.end(2)].strip()
+
+        # Verificar que el usuario tenga a este cuidador asignado
+        users = get_users_for_caregiver(user_id)
+        if target_user_id not in users:
+            response_msg = f"⚠️ El número {target_number} no te tiene asignado como cuidador.\n\nSolo podés enviar mensajes a usuarios que te hayan configurado como su cuidador."
+            add_to_conversation(user_id, "assistant", response_msg)
+            return response_msg
+
+        # Enviar mensaje inmediatamente
+        try:
+            message = f"📨 *Mensaje de tu cuidador:*\n\n{original_msg}"
+            send_whatsapp_message(target_user_id, message)
+            response_msg = f"✅ Mensaje enviado a {target_number}"
+        except Exception as e:
+            response_msg = f"❌ Error enviando mensaje: {e}"
+
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
+    # Ver recordatorios pendientes (cuidador)
+    if msg_lower in ["mis recordatorios programados", "recordatorios programados", "recordatorios pendientes"]:
+        pending = get_pending_caregiver_reminders(user_id)
+        if pending:
+            response_msg = "⏰ *Tus recordatorios programados:*\n\n"
+            for r in pending:
+                target_display = r["target_user"].replace('whatsapp:', '')
+                try:
+                    remind_time = datetime.fromisoformat(r["remind_at"]).strftime("%H:%M")
+                except:
+                    remind_time = "?"
+                response_msg += f"• {target_display}: {r['message']} (a las {remind_time})\n"
+        else:
+            response_msg = "⏰ No tenés recordatorios programados pendientes."
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
     # Clima directo
     if msg_lower in ["clima", "el clima", "como esta el clima", "cómo está el clima", "que clima hace", "qué clima hace", "tiempo"]:
         city = get_user_location(user_id)
@@ -2226,6 +2409,8 @@ scheduler = BackgroundScheduler(timezone=TIMEZONE)
 scheduler.add_job(check_and_send_reminders, "interval", minutes=5)
 # Recordatorios personalizados cada minuto
 scheduler.add_job(check_and_send_custom_reminders, "interval", minutes=1)
+# Recordatorios programados por cuidadores cada minuto
+scheduler.add_job(check_and_send_caregiver_reminders, "interval", minutes=1)
 # Verificar confirmaciones de medicamentos cada minuto
 scheduler.add_job(check_medication_confirmations, "interval", minutes=1)
 # Resumen matutino a las 8:00 AM
