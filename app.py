@@ -66,14 +66,12 @@ registered_users = {}
 # Zona horaria
 TIMEZONE = pytz.timezone("America/Argentina/Buenos_Aires")
 
-# Archivo para guardar cuidadores de cada usuario
-CAREGIVERS_FILE = os.path.join(DATA_DIR, "caregivers.json")
-
 # Archivos de datos
 DATA_DIR = os.path.dirname(os.path.abspath(__file__))
 TASKS_FILE = os.path.join(DATA_DIR, "tasks.json")
 NOTES_FILE = os.path.join(DATA_DIR, "notes.json")
 CONVERSATIONS_FILE = os.path.join(DATA_DIR, "conversations.json")
+CAREGIVERS_FILE = os.path.join(DATA_DIR, "caregivers.json")
 
 # ==================== HISTORIAL DE CONVERSACIONES ====================
 
