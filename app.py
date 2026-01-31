@@ -1126,6 +1126,50 @@ def analyze_expenses(user_id):
 # ==================== UBICACIÓN ====================
 
 USER_LOCATIONS_FILE = os.path.join(DATA_DIR, "locations.json")
+USER_GPS_FILE = os.path.join(DATA_DIR, "user_gps.json")
+
+# ==================== GPS EN TIEMPO REAL ====================
+
+def load_user_gps():
+    """Carga las coordenadas GPS guardadas"""
+    if os.path.exists(USER_GPS_FILE):
+        try:
+            with open(USER_GPS_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_user_gps_data(data):
+    """Guarda las coordenadas GPS"""
+    with open(USER_GPS_FILE, "w") as f:
+        json.dump(data, f, ensure_ascii=False)
+
+def set_user_gps(user_id, latitude, longitude):
+    """Guarda las coordenadas GPS del usuario"""
+    gps_data = load_user_gps()
+    gps_data[user_id] = {
+        "latitude": latitude,
+        "longitude": longitude,
+        "updated": datetime.now(TIMEZONE).isoformat()
+    }
+    save_user_gps_data(gps_data)
+    print(f"GPS guardado para {user_id}: {latitude}, {longitude}")
+
+def get_user_gps(user_id):
+    """Obtiene las últimas coordenadas GPS del usuario"""
+    gps_data = load_user_gps()
+    return gps_data.get(user_id)
+
+def get_google_maps_link(user_id):
+    """Genera un link de Google Maps con la última ubicación GPS"""
+    gps = get_user_gps(user_id)
+    if gps:
+        lat = gps.get("latitude")
+        lng = gps.get("longitude")
+        if lat and lng:
+            return f"https://maps.google.com/?q={lat},{lng}"
+    return None
 
 def load_locations():
     """Carga las ubicaciones guardadas"""
@@ -2410,7 +2454,8 @@ def get_welcome_message():
 🆘 *EMERGENCIA*
 • "mi cuidador es +54..." - configurar
 • "agregar cuidador +54..." - secundario
-• "ayuda" - alertar a tus cuidadores
+• "mi casa es [dirección]" - guardar ubicación
+• "ayuda" - alertar con tu ubicación
 
 🎤 *Podés enviarme mensajes de voz* y los entiendo perfectamente."""
 
@@ -2546,12 +2591,22 @@ def get_ai_response(user_message, user_id):
         if msg_lower not in ["saltar", "no", "menu", "menú", "ayuda", "clima", "noticias", "dolar", "dólar"]:
             name = user_message.strip().title()
             set_caregiver_name(user_id, name)
-            response_msg = f"✅ Perfecto, guardé a *{name}* como tu cuidador.\n\nCuando escribas 'ayuda', se le enviará una alerta."
+            # Verificar si ya tiene GPS guardado
+            has_gps = get_user_gps(user_id) is not None
+            if has_gps:
+                response_msg = f"✅ Perfecto, guardé a *{name}* como tu cuidador.\n\nCuando escribas 'ayuda', se le enviará una alerta con tu ubicación."
+            else:
+                response_msg = f"✅ Perfecto, guardé a *{name}* como tu cuidador.\n\n📍 *Último paso:* Escribí tu dirección así:\n*mi casa es [tu dirección]*\n\nEjemplo: mi casa es Av. Colón 500, Córdoba"
             add_to_conversation(user_id, "assistant", response_msg)
             return response_msg
         elif msg_lower in ["saltar", "no"]:
             set_caregiver_name(user_id, "Cuidador")  # Nombre por defecto
-            response_msg = "✅ Cuidador configurado.\n\nCuando escribas 'ayuda', se le enviará una alerta."
+            # Verificar si ya tiene GPS guardado
+            has_gps = get_user_gps(user_id) is not None
+            if has_gps:
+                response_msg = "✅ Cuidador configurado.\n\nCuando escribas 'ayuda', se le enviará una alerta con tu ubicación."
+            else:
+                response_msg = "✅ Cuidador configurado.\n\n📍 *Último paso:* Escribí tu dirección así:\n*mi casa es [tu dirección]*\n\nEjemplo: mi casa es Av. Colón 500, Córdoba"
             add_to_conversation(user_id, "assistant", response_msg)
             return response_msg
 
@@ -2563,6 +2618,44 @@ def get_ai_response(user_message, user_id):
             number = '+' + number
         set_caregiver(user_id, number)
         response_msg = f"✅ Número guardado: {number}\n\n¿Cómo se llama tu cuidador? (escribí el nombre o *saltar* si no querés)"
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
+    # Guardar ubicación GPS manualmente (link de Google Maps o coordenadas)
+    # Formatos: maps.google.com/?q=-31.4,64.1 o google.com/maps/@-31.4,64.1 o "-31.4, -64.1"
+    gps_pattern = re.search(r'(?:maps.*[?@]|ubicacion.*?|gps.*?)(-?\d+\.?\d*)[,\s]+(-?\d+\.?\d*)', user_message, re.IGNORECASE)
+    if gps_pattern:
+        lat = gps_pattern.group(1)
+        lng = gps_pattern.group(2)
+        set_user_gps(user_id, lat, lng)
+        maps_link = f"https://maps.google.com/?q={lat},{lng}"
+        response_msg = f"📍 ¡Ubicación GPS guardada!\n\n{maps_link}\n\nAhora cuando pidas *ayuda*, tu cuidador recibirá este link."
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
+    # Guardar dirección de casa: "mi casa es [dirección]" o "vivo en [dirección]"
+    casa_match = re.search(r'(?:mi casa es|mi casa queda en|vivo en|mi direccion es|mi dirección es)\s+(.+)', user_message, re.IGNORECASE)
+    if casa_match:
+        direccion = casa_match.group(1).strip()
+        # Usar Nominatim (OpenStreetMap) para geocoding gratuito
+        try:
+            geocode_url = f"https://nominatim.openstreetmap.org/search?q={requests.utils.quote(direccion)}&format=json&limit=1"
+            geo_response = requests.get(geocode_url, headers={"User-Agent": "AsistentePersonal/1.0"}, timeout=10)
+            geo_data = geo_response.json()
+
+            if geo_data and len(geo_data) > 0:
+                lat = geo_data[0]["lat"]
+                lng = geo_data[0]["lon"]
+                display_name = geo_data[0].get("display_name", direccion)
+                set_user_gps(user_id, lat, lng)
+                maps_link = f"https://maps.google.com/?q={lat},{lng}"
+                response_msg = f"📍 ¡Ubicación guardada!\n\n*{display_name.split(',')[0]}*\n\n{maps_link}\n\nAhora cuando pidas *ayuda*, tu cuidador recibirá este link."
+            else:
+                response_msg = f"❌ No pude encontrar esa dirección.\n\nProbá ser más específico, por ejemplo:\n*mi casa es Av. Colón 500, Córdoba*"
+        except Exception as e:
+            print(f"Error en geocoding: {e}")
+            response_msg = "❌ Error buscando la dirección. Intentá de nuevo."
+
         add_to_conversation(user_id, "assistant", response_msg)
         return response_msg
 
@@ -2591,11 +2684,20 @@ def get_ai_response(user_message, user_id):
             now = datetime.now(TIMEZONE)
             user_number_display = user_id.replace('whatsapp:', '')
 
-            # Obtener ubicación del usuario
-            user_location = get_user_location(user_id)
-            location_text = user_location.split(",")[0] if user_location else "No configurada"
+            # Obtener ubicación GPS precisa (link de Google Maps)
+            maps_link = get_google_maps_link(user_id)
 
-            alert_message = f"🚨 *ALERTA DE AYUDA*\n\n📱 {user_number_display} ha pedido ayuda.\n\n📍 Ubicación: {location_text}\n📅 Fecha: {now.strftime('%d/%m/%Y')}\n⏰ Hora: {now.strftime('%H:%M')}\n\n_Contactalo lo antes posible_"
+            # También obtener ciudad configurada como respaldo
+            user_location = get_user_location(user_id)
+            city_text = user_location.split(",")[0] if user_location else "No configurada"
+
+            # Construir mensaje con ubicación GPS si está disponible
+            if maps_link:
+                location_section = f"📍 *Ubicación GPS:*\n{maps_link}\n\n🏠 Ciudad: {city_text}"
+            else:
+                location_section = f"📍 Ubicación: {city_text}\n\n⚠️ _No hay GPS reciente. Pedile que comparta su ubicación._"
+
+            alert_message = f"🚨 *ALERTA DE AYUDA*\n\n📱 {user_number_display} ha pedido ayuda.\n\n{location_section}\n\n📅 Fecha: {now.strftime('%d/%m/%Y')}\n⏰ Hora: {now.strftime('%H:%M')}\n\n_Contactalo lo antes posible_"
 
             # Enviar a todos los cuidadores
             alert_all_caregivers(user_id, alert_message)
@@ -2865,6 +2967,16 @@ def whatsapp_webhook():
     message_body = request.values.get("Body", "")
     num_media = int(request.values.get("NumMedia", 0))
 
+    # Capturar coordenadas GPS si el usuario comparte ubicación
+    latitude = request.values.get("Latitude", "")
+    longitude = request.values.get("Longitude", "")
+
+    location_shared = False
+    if latitude and longitude:
+        set_user_gps(from_number, latitude, longitude)
+        location_shared = True
+        print(f"Ubicación GPS recibida de {from_number}: {latitude}, {longitude}")
+
     print(f"Mensaje de {from_number}: {message_body} (Media: {num_media})")
 
     # Registrar usuario para recordatorios
@@ -2885,12 +2997,16 @@ def whatsapp_webhook():
             else:
                 message_body = "[No pude entender el audio]"
 
-    # Obtener respuesta de Claude
-    try:
-        ai_response = get_ai_response(message_body, from_number)
-    except Exception as e:
-        ai_response = f"Error: {str(e)}"
-        print(f"Error en get_ai_response: {e}")
+    # Si solo compartió ubicación (sin texto), confirmar que se guardó
+    if location_shared and not message_body.strip():
+        ai_response = "📍 ¡Ubicación guardada!\n\nAhora cuando pidas *ayuda*, tu cuidador recibirá un link de Google Maps con tu ubicación exacta."
+    else:
+        # Obtener respuesta de Claude
+        try:
+            ai_response = get_ai_response(message_body, from_number)
+        except Exception as e:
+            ai_response = f"Error: {str(e)}"
+            print(f"Error en get_ai_response: {e}")
 
     # Siempre enviar usando la API de Twilio (más confiable con WhatsApp Business)
     try:
