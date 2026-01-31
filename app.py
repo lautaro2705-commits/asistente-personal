@@ -273,6 +273,7 @@ def get_weather(city="Cordoba,Argentina"):
 # ==================== MEDICAMENTOS ====================
 
 MEDS_FILE = os.path.join(DATA_DIR, "medications.json")
+PENDING_MED_CONFIRMATIONS_FILE = os.path.join(DATA_DIR, "pending_med_confirmations.json")
 
 def load_medications():
     """Carga los medicamentos desde el archivo JSON"""
@@ -324,7 +325,8 @@ def log_medication_taken(user_id, period):
         meds[user_id] = {"medications": [], "log": []}
 
     today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
-    log_entry = {"date": today, "period": period, "taken": True}
+    now_time = datetime.now(TIMEZONE).strftime("%H:%M")
+    log_entry = {"date": today, "period": period, "taken": True, "time": now_time}
     meds[user_id]["log"].append(log_entry)
 
     # Mantener solo los últimos 60 días de log
@@ -343,6 +345,15 @@ def check_medication_taken_today(user_id, period):
             return True
     return False
 
+def get_todays_medication_log(user_id):
+    """Obtiene el log de medicamentos de hoy"""
+    meds = load_medications()
+    if user_id not in meds:
+        return []
+
+    today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+    return [entry for entry in meds[user_id].get("log", []) if entry.get("date") == today]
+
 def format_medications(user_id):
     """Formatea la lista de medicamentos"""
     meds = get_medications(user_id)
@@ -354,8 +365,57 @@ def format_medications(user_id):
         result += f"  {i}. {med}\n"
     return result
 
+# Sistema de confirmaciones pendientes
+def load_pending_confirmations():
+    """Carga confirmaciones pendientes de medicamentos"""
+    if os.path.exists(PENDING_MED_CONFIRMATIONS_FILE):
+        try:
+            with open(PENDING_MED_CONFIRMATIONS_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_pending_confirmations(confirmations):
+    """Guarda confirmaciones pendientes"""
+    with open(PENDING_MED_CONFIRMATIONS_FILE, "w") as f:
+        json.dump(confirmations, f, ensure_ascii=False)
+
+def set_pending_confirmation(user_id, period, attempt=1):
+    """Marca que hay una confirmación pendiente"""
+    confirmations = load_pending_confirmations()
+    confirmations[user_id] = {
+        "period": period,
+        "attempt": attempt,
+        "sent_at": datetime.now(TIMEZONE).isoformat(),
+        "date": datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+    }
+    save_pending_confirmations(confirmations)
+
+def get_pending_confirmation(user_id):
+    """Obtiene confirmación pendiente de un usuario"""
+    confirmations = load_pending_confirmations()
+    pending = confirmations.get(user_id)
+    if pending:
+        # Verificar que sea de hoy
+        today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+        if pending.get("date") == today:
+            return pending
+    return None
+
+def clear_pending_confirmation(user_id):
+    """Limpia la confirmación pendiente"""
+    confirmations = load_pending_confirmations()
+    if user_id in confirmations:
+        del confirmations[user_id]
+        save_pending_confirmations(confirmations)
+
+def has_pending_medication_confirmation(user_id):
+    """Verifica si el usuario tiene confirmación pendiente"""
+    return get_pending_confirmation(user_id) is not None
+
 def send_medication_reminder(period):
-    """Envía recordatorio de medicamentos a todos los usuarios"""
+    """Envía recordatorio de medicamentos (primer intento)"""
     print(f"[{datetime.now()}] Enviando recordatorio de medicamentos ({period})...")
 
     meds = load_medications()
@@ -365,16 +425,124 @@ def send_medication_reminder(period):
             # Verificar si ya tomó los medicamentos
             if not check_medication_taken_today(user_id, period):
                 med_list = ", ".join(meds[user_id]["medications"])
-                if period == "mañana":
-                    message = f"💊 *Recordatorio de medicamentos (mañana)*\n\n¿Ya tomaste tus medicamentos?\n\n📋 {med_list}\n\nResponde 'tomé mis medicamentos' o 'ya tomé' cuando los hayas tomado."
-                else:
-                    message = f"💊 *Recordatorio de medicamentos (noche)*\n\n¿Ya tomaste tus medicamentos de la noche?\n\n📋 {med_list}\n\nResponde 'tomé mis medicamentos' o 'ya tomé' cuando los hayas tomado."
+
+                message = f"💊 *¿Tomaste tus medicamentos?*\n\n📋 {med_list}\n\n👉 Respondé *sí* o *tomé* para confirmar."
 
                 try:
                     send_whatsapp_message(user_id, message)
+                    # Marcar confirmación pendiente (intento 1)
+                    set_pending_confirmation(user_id, period, attempt=1)
                     print(f"Recordatorio de medicamentos enviado a {user_id}")
                 except Exception as e:
                     print(f"Error enviando recordatorio a {user_id}: {e}")
+
+def check_medication_confirmations():
+    """Revisa confirmaciones pendientes y envía segundo aviso o alerta"""
+    print(f"[{datetime.now()}] Verificando confirmaciones de medicamentos...")
+
+    confirmations = load_pending_confirmations()
+    now = datetime.now(TIMEZONE)
+
+    for user_id, pending in list(confirmations.items()):
+        # Verificar que sea de hoy
+        if pending.get("date") != now.strftime("%Y-%m-%d"):
+            clear_pending_confirmation(user_id)
+            continue
+
+        # Verificar si ya confirmó
+        if check_medication_taken_today(user_id, pending["period"]):
+            clear_pending_confirmation(user_id)
+            continue
+
+        sent_at = datetime.fromisoformat(pending["sent_at"])
+        minutes_passed = (now - sent_at).total_seconds() / 60
+
+        if pending["attempt"] == 1 and minutes_passed >= 5:
+            # Segundo intento después de 5 minutos
+            meds = load_medications()
+            if user_id in meds and meds[user_id].get("medications"):
+                med_list = ", ".join(meds[user_id]["medications"])
+                message = f"⚠️ *Segundo aviso de medicamentos*\n\n📋 {med_list}\n\n👉 Por favor respondé *sí* o *tomé* para confirmar que los tomaste."
+
+                try:
+                    send_whatsapp_message(user_id, message)
+                    set_pending_confirmation(user_id, pending["period"], attempt=2)
+                    print(f"Segundo recordatorio enviado a {user_id}")
+                except Exception as e:
+                    print(f"Error enviando segundo recordatorio: {e}")
+
+        elif pending["attempt"] == 2 and minutes_passed >= 5:
+            # Alertar al cuidador después de 5 minutos más
+            caregiver = get_caregiver(user_id)
+            if caregiver:
+                user_display = user_id.replace('whatsapp:', '')
+                meds = load_medications()
+                med_list = ", ".join(meds.get(user_id, {}).get("medications", []))
+
+                alert_msg = f"⚠️ *ALERTA: Medicamentos no confirmados*\n\n{user_display} no ha confirmado la toma de medicamentos.\n\n📋 Medicamentos: {med_list}\n📅 Fecha: {now.strftime('%d/%m/%Y')}\n⏰ Hora: {now.strftime('%H:%M')}\n\nSe enviaron 2 recordatorios sin respuesta."
+
+                try:
+                    send_whatsapp_message(caregiver, alert_msg)
+                    print(f"Alerta de medicamentos enviada al cuidador de {user_id}")
+                except Exception as e:
+                    print(f"Error enviando alerta al cuidador: {e}")
+
+            # Limpiar confirmación pendiente
+            clear_pending_confirmation(user_id)
+
+def send_daily_medication_report():
+    """Envía reporte diario de medicamentos a los cuidadores"""
+    print(f"[{datetime.now()}] Enviando reporte diario de medicamentos...")
+
+    meds = load_medications()
+    caregivers_data = load_caregivers()
+
+    for user_id in meds:
+        if not meds[user_id].get("medications"):
+            continue
+
+        caregiver = caregivers_data.get(user_id)
+        if not caregiver:
+            continue
+
+        user_display = user_id.replace('whatsapp:', '')
+        med_list = meds[user_id]["medications"]
+        today_log = get_todays_medication_log(user_id)
+
+        # Crear reporte
+        report = f"📊 *Reporte de medicamentos*\n👤 {user_display}\n📅 {datetime.now(TIMEZONE).strftime('%d/%m/%Y')}\n\n"
+
+        report += f"💊 *Medicamentos:* {', '.join(med_list)}\n\n"
+
+        if today_log:
+            report += "✅ *Confirmaciones de hoy:*\n"
+            for entry in today_log:
+                period = entry.get("period", "")
+                time = entry.get("time", "")
+                report += f"  • {period.capitalize()}: {time} hs\n"
+        else:
+            report += "❌ *No se registraron tomas hoy*\n"
+
+        # Verificar qué periodos faltan
+        morning_taken = check_medication_taken_today(user_id, "mañana")
+        night_taken = check_medication_taken_today(user_id, "noche")
+
+        now_hour = datetime.now(TIMEZONE).hour
+
+        missing = []
+        if not morning_taken:
+            missing.append("mañana")
+        if not night_taken and now_hour >= 21:
+            missing.append("noche")
+
+        if missing:
+            report += f"\n⚠️ *Sin confirmar:* {', '.join(missing)}"
+
+        try:
+            send_whatsapp_message(caregiver, report)
+            print(f"Reporte diario enviado al cuidador de {user_id}")
+        except Exception as e:
+            print(f"Error enviando reporte diario: {e}")
 
 # ==================== RECORDATORIOS PERSONALIZADOS ====================
 
@@ -1699,11 +1867,23 @@ def is_new_user(user_id):
     conversation = get_conversation(user_id)
     return len(conversation) == 0
 
-def get_welcome_message():
-    """Mensaje de bienvenida para usuarios nuevos"""
+def get_welcome_message_short():
+    """Mensaje de bienvenida corto para adultos mayores"""
     return """¡Hola! 👋 Soy tu *Asistente Personal*.
 
-Estoy acá para ayudarte a organizar tu día a día. Esto es lo que puedo hacer:
+Puedo ayudarte con:
+• 💊 *Medicamentos* - te recuerdo tomarlos
+• 🌤 *Clima* - escribí "clima"
+• 📋 *Tareas* - escribí "mis tareas"
+• 🆘 *Ayuda* - escribí "ayuda" si necesitás asistencia
+
+📖 Escribí *"menú"* para ver todo lo que puedo hacer.
+
+¿En qué te puedo ayudar?"""
+
+def get_welcome_message():
+    """Mensaje completo con todas las funcionalidades"""
+    return """📖 *MENÚ COMPLETO*
 
 📋 *TAREAS*
 • "agregar tarea: comprar leche"
@@ -1717,37 +1897,29 @@ Estoy acá para ayudarte a organizar tu día a día. Esto es lo que puedo hacer:
 💰 *GASTOS*
 • "gasté 5000 en supermercado"
 • "mis gastos"
-• "análisis de gastos"
 
 🛒 *LISTA DE COMPRAS*
 • "agregar a compras: pan, leche"
 • "lista de compras"
-• "compré el 1"
 
 ⏰ *RECORDATORIOS*
-• "recordame en 2 horas sacar la ropa"
-• "recordame mañana a las 10 llamar al médico"
+• "recordame en 2 horas llamar al médico"
 
 💊 *MEDICAMENTOS*
-• "tomo ibuprofeno"
-• "mis medicamentos"
-• "ya tomé mis medicamentos"
+• "tomo ibuprofeno" - agregar medicamento
+• "mis medicamentos" - ver lista
+• Cuando te pregunte si tomaste, respondé "sí" o "tomé"
 
 🌤 *INFO ÚTIL*
 • "clima" - pronóstico del tiempo
-• "dólar" - cotización actual
-• "noticias" - titulares del día
-• "buen día" - resumen completo del día
-
-🎤 *También podés enviarme audios* y los entiendo perfectamente.
+• "dólar" - cotización del dólar
+• "buen día" - resumen del día
 
 🆘 *EMERGENCIA*
-• "mi cuidador es +54XXXXXXXXXX" - configurar cuidador
-• "ayuda" - enviar alerta a tu cuidador
+• "mi cuidador es +54XXXXXXXXXX" - configurar
+• "ayuda" - alertar a tu cuidador
 
-📋 Escribí "menú" en cualquier momento para ver estas opciones.
-
-¿En qué te puedo asistir?"""
+🎤 También podés enviarme *audios*."""
 
 def get_ai_response(user_message, user_id):
     """Obtiene respuesta de Claude"""
@@ -1761,19 +1933,19 @@ def get_ai_response(user_message, user_id):
     add_to_conversation(user_id, "user", user_message)
     conversation.append({"role": "user", "content": user_message})
 
-    # Si es usuario nuevo y dice hola/buen día, mostrar bienvenida
+    # Si es usuario nuevo y dice hola/buen día, mostrar bienvenida corta
     greeting_words = ["hola", "buenas", "buen dia", "buen día", "buenos dias", "buenos días", "hey", "hello", "hi", "que tal", "qué tal"]
     if is_first_message and any(word in user_message.lower() for word in greeting_words):
-        welcome = get_welcome_message()
+        welcome = get_welcome_message_short()
         add_to_conversation(user_id, "assistant", welcome)
         return welcome
 
-    # Si dice "menú", mostrar las funcionalidades
+    # Si dice "menú", mostrar el menú completo
     menu_words = ["menu", "menú", "help", "que podes hacer", "qué podés hacer", "como funciona", "cómo funciona", "funciones", "comandos"]
     if any(word in user_message.lower() for word in menu_words):
-        welcome = get_welcome_message()
-        add_to_conversation(user_id, "assistant", welcome)
-        return welcome
+        full_menu = get_welcome_message()
+        add_to_conversation(user_id, "assistant", full_menu)
+        return full_menu
 
     # Comandos directos que no necesitan pasar por Claude
     msg_lower = user_message.lower().strip()
@@ -1839,6 +2011,19 @@ def get_ai_response(user_message, user_id):
         dolar = get_dolar()
         add_to_conversation(user_id, "assistant", dolar)
         return dolar
+
+    # Confirmación de medicamentos
+    confirmation_words = ["si", "sí", "tome", "tomé", "si tome", "sí tomé", "ya tome", "ya tomé", "listo", "ok", "ya"]
+    if msg_lower in confirmation_words or msg_lower.startswith("si ") or msg_lower.startswith("sí "):
+        # Verificar si hay confirmación pendiente
+        pending = get_pending_confirmation(user_id)
+        if pending:
+            period = pending["period"]
+            log_medication_taken(user_id, period)
+            clear_pending_confirmation(user_id)
+            response_msg = "✅ ¡Muy bien! Quedó registrado que tomaste tus medicamentos. 💪"
+            add_to_conversation(user_id, "assistant", response_msg)
+            return response_msg
 
     now = datetime.now(TIMEZONE)
     today = now.strftime("%Y-%m-%d %A")
@@ -2041,12 +2226,16 @@ scheduler = BackgroundScheduler(timezone=TIMEZONE)
 scheduler.add_job(check_and_send_reminders, "interval", minutes=5)
 # Recordatorios personalizados cada minuto
 scheduler.add_job(check_and_send_custom_reminders, "interval", minutes=1)
+# Verificar confirmaciones de medicamentos cada minuto
+scheduler.add_job(check_medication_confirmations, "interval", minutes=1)
 # Resumen matutino a las 8:00 AM
 scheduler.add_job(send_morning_summary, "cron", hour=8, minute=45)
 # Recordatorio de medicamentos a las 10:00 AM
 scheduler.add_job(lambda: send_medication_reminder("mañana"), "cron", hour=10, minute=0)
 # Recordatorio de medicamentos a las 9:00 PM
 scheduler.add_job(lambda: send_medication_reminder("noche"), "cron", hour=21, minute=0)
+# Reporte diario de medicamentos al cuidador a las 22:00
+scheduler.add_job(send_daily_medication_report, "cron", hour=22, minute=0)
 scheduler.start()
 
 if __name__ == "__main__":
