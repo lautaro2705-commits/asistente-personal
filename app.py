@@ -2656,6 +2656,12 @@ def get_ai_response(user_message, user_id):
         add_to_conversation(user_id, "assistant", dolar)
         return dolar
 
+    # Noticias directo
+    if msg_lower in ["noticias", "las noticias", "noticias de hoy", "que paso hoy", "qué pasó hoy"]:
+        news = format_news()
+        add_to_conversation(user_id, "assistant", news)
+        return news
+
     # Confirmación de medicamentos
     confirmation_words = ["si", "sí", "tome", "tomé", "si tome", "sí tomé", "ya tome", "ya tomé", "listo", "ok", "ya"]
     if msg_lower in confirmation_words or msg_lower.startswith("si ") or msg_lower.startswith("sí "):
