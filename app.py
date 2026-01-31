@@ -1170,7 +1170,7 @@ def save_caregivers(caregivers):
     with open(CAREGIVERS_FILE, "w") as f:
         json.dump(caregivers, f, ensure_ascii=False)
 
-def set_caregiver(user_id, caregiver_number, is_primary=True):
+def set_caregiver(user_id, caregiver_number, is_primary=True, name=None):
     """Guarda un cuidador de un usuario (soporta múltiples)"""
     caregivers = load_caregivers()
     # Asegurar formato whatsapp:+número
@@ -1178,20 +1178,47 @@ def set_caregiver(user_id, caregiver_number, is_primary=True):
         caregiver_number = f"whatsapp:{caregiver_number}"
 
     if user_id not in caregivers:
-        caregivers[user_id] = {"primary": None, "secondary": []}
+        caregivers[user_id] = {"primary": None, "primary_name": None, "secondary": []}
 
     # Migrar formato antiguo si es necesario
     if isinstance(caregivers[user_id], str):
         old_primary = caregivers[user_id]
-        caregivers[user_id] = {"primary": old_primary, "secondary": []}
+        caregivers[user_id] = {"primary": old_primary, "primary_name": None, "secondary": []}
 
     if is_primary:
         caregivers[user_id]["primary"] = caregiver_number
+        if name:
+            caregivers[user_id]["primary_name"] = name
     else:
         if caregiver_number not in caregivers[user_id]["secondary"]:
             caregivers[user_id]["secondary"].append(caregiver_number)
 
     save_caregivers(caregivers)
+
+def set_caregiver_name(user_id, name):
+    """Guarda el nombre del cuidador principal"""
+    caregivers = load_caregivers()
+    if user_id in caregivers:
+        if isinstance(caregivers[user_id], dict):
+            caregivers[user_id]["primary_name"] = name
+            save_caregivers(caregivers)
+
+def get_caregiver_name(user_id):
+    """Obtiene el nombre del cuidador principal"""
+    caregivers = load_caregivers()
+    cg = caregivers.get(user_id)
+    if cg and isinstance(cg, dict):
+        return cg.get("primary_name")
+    return None
+
+def is_pending_caregiver_name(user_id):
+    """Verifica si falta el nombre del cuidador"""
+    caregivers = load_caregivers()
+    cg = caregivers.get(user_id)
+    if cg and isinstance(cg, dict):
+        # Tiene cuidador pero no tiene nombre
+        return cg.get("primary") and not cg.get("primary_name")
+    return False
 
 def remove_caregiver(user_id, caregiver_number):
     """Elimina un cuidador secundario"""
@@ -2513,6 +2540,21 @@ def get_ai_response(user_message, user_id):
 
     # Comandos directos que no necesitan pasar por Claude
 
+    # Verificar si está pendiente el nombre del cuidador
+    if is_pending_caregiver_name(user_id):
+        # El usuario está dando el nombre del cuidador
+        if msg_lower not in ["saltar", "no", "menu", "menú", "ayuda", "clima", "noticias", "dolar", "dólar"]:
+            name = user_message.strip().title()
+            set_caregiver_name(user_id, name)
+            response_msg = f"✅ Perfecto, guardé a *{name}* como tu cuidador.\n\nCuando escribas 'ayuda', se le enviará una alerta."
+            add_to_conversation(user_id, "assistant", response_msg)
+            return response_msg
+        elif msg_lower in ["saltar", "no"]:
+            set_caregiver_name(user_id, "Cuidador")  # Nombre por defecto
+            response_msg = "✅ Cuidador configurado.\n\nCuando escribas 'ayuda', se le enviará una alerta."
+            add_to_conversation(user_id, "assistant", response_msg)
+            return response_msg
+
     # Configurar cuidador: "mi cuidador es +54..." o "cuidador: +54..."
     caregiver_match = re.search(r'(?:mi cuidador es|cuidador:|configurar cuidador)\s*\+?(\d[\d\s\-]+)', user_message.lower())
     if caregiver_match:
@@ -2520,7 +2562,7 @@ def get_ai_response(user_message, user_id):
         if not number.startswith('+'):
             number = '+' + number
         set_caregiver(user_id, number)
-        response_msg = f"✅ Cuidador configurado: {number}\n\nCuando escribas 'ayuda', se le enviará una alerta a este número."
+        response_msg = f"✅ Número guardado: {number}\n\n¿Cómo se llama tu cuidador? (escribí el nombre o *saltar* si no querés)"
         add_to_conversation(user_id, "assistant", response_msg)
         return response_msg
 
@@ -2528,7 +2570,8 @@ def get_ai_response(user_message, user_id):
     if msg_lower in ["mi cuidador", "quien es mi cuidador", "quién es mi cuidador", "ver cuidador"]:
         caregiver = get_caregiver(user_id)
         if caregiver:
-            response_msg = f"👤 Tu cuidador configurado es: {caregiver.replace('whatsapp:', '')}"
+            caregiver_name = get_caregiver_name(user_id) or "Sin nombre"
+            response_msg = f"👤 Tu cuidador: *{caregiver_name}*\n📱 {caregiver.replace('whatsapp:', '')}"
         else:
             response_msg = "⚠️ No tenés un cuidador configurado.\n\nPara configurarlo, escribí:\n*mi cuidador es +54XXXXXXXXXX*"
         add_to_conversation(user_id, "assistant", response_msg)
@@ -2543,14 +2586,20 @@ def get_ai_response(user_message, user_id):
             add_to_conversation(user_id, "assistant", response_msg)
             return response_msg
 
-        # Enviar alerta al cuidador
+        # Enviar alerta a todos los cuidadores
         try:
             now = datetime.now(TIMEZONE)
-            # Extraer número del usuario para mostrarlo más legible
             user_number_display = user_id.replace('whatsapp:', '')
-            alert_message = f"🚨 *ALERTA DE AYUDA*\n\n{user_number_display} ha pedido ayuda.\n\n📅 Fecha: {now.strftime('%d/%m/%Y')}\n⏰ Hora: {now.strftime('%H:%M')}"
-            send_whatsapp_message(caregiver, alert_message)
-            print(f"Alerta enviada al cuidador: {caregiver}")
+
+            # Obtener ubicación del usuario
+            user_location = get_user_location(user_id)
+            location_text = user_location.split(",")[0] if user_location else "No configurada"
+
+            alert_message = f"🚨 *ALERTA DE AYUDA*\n\n📱 {user_number_display} ha pedido ayuda.\n\n📍 Ubicación: {location_text}\n📅 Fecha: {now.strftime('%d/%m/%Y')}\n⏰ Hora: {now.strftime('%H:%M')}\n\n_Contactalo lo antes posible_"
+
+            # Enviar a todos los cuidadores
+            alert_all_caregivers(user_id, alert_message)
+            print(f"Alerta enviada a cuidadores de {user_id}")
         except Exception as e:
             print(f"Error enviando alerta al cuidador: {e}")
             response_msg = "❌ Hubo un error enviando la alerta. Por favor intentá de nuevo o contactá directamente a tu cuidador."
@@ -2558,7 +2607,8 @@ def get_ai_response(user_message, user_id):
             return response_msg
 
         # Responder al usuario
-        response_msg = "🆘 Tu mensaje de ayuda ha sido enviado a tu cuidador. Pronto se pondrá en contacto contigo.\n\n¿Hay algo más en lo que pueda asistirte mientras tanto?"
+        caregiver_name = get_caregiver_name(user_id) or "tu cuidador"
+        response_msg = f"🆘 Tu mensaje de ayuda ha sido enviado a *{caregiver_name}*. Pronto se pondrá en contacto contigo.\n\n¿Hay algo más en lo que pueda asistirte mientras tanto?"
         add_to_conversation(user_id, "assistant", response_msg)
         return response_msg
 
