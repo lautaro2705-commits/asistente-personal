@@ -75,6 +75,8 @@ CAREGIVERS_FILE = os.path.join(DATA_DIR, "caregivers.json")
 USER_PROFILES_FILE = os.path.join(DATA_DIR, "user_profiles.json")
 WELLNESS_CHECK_FILE = os.path.join(DATA_DIR, "wellness_checks.json")
 USER_ACTIVITY_FILE = os.path.join(DATA_DIR, "user_activity.json")
+CONTACTS_FILE = os.path.join(DATA_DIR, "contacts.json")
+APPOINTMENTS_FILE = os.path.join(DATA_DIR, "appointments.json")
 
 # ==================== PERFILES DE USUARIO ====================
 
@@ -1122,6 +1124,223 @@ def analyze_expenses(user_id):
         result += f"\n📅 *Promedio diario:* ${daily_avg:,.0f}"
 
     return result
+
+# ==================== DIRECTORIO DE CONTACTOS ====================
+
+def load_contacts():
+    """Carga los contactos guardados"""
+    if os.path.exists(CONTACTS_FILE):
+        try:
+            with open(CONTACTS_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_contacts(contacts):
+    """Guarda los contactos"""
+    with open(CONTACTS_FILE, "w") as f:
+        json.dump(contacts, f, ensure_ascii=False)
+
+def add_contact(user_id, name, phone, category=None):
+    """Agrega un contacto al directorio"""
+    contacts = load_contacts()
+    if user_id not in contacts:
+        contacts[user_id] = []
+
+    # Verificar si ya existe
+    for c in contacts[user_id]:
+        if c["name"].lower() == name.lower():
+            c["phone"] = phone
+            if category:
+                c["category"] = category
+            save_contacts(contacts)
+            return "actualizado"
+
+    contacts[user_id].append({
+        "name": name,
+        "phone": phone,
+        "category": category or "general",
+        "created": datetime.now(TIMEZONE).isoformat()
+    })
+    save_contacts(contacts)
+    return "agregado"
+
+def get_contacts(user_id):
+    """Obtiene todos los contactos de un usuario"""
+    contacts = load_contacts()
+    return contacts.get(user_id, [])
+
+def find_contact(user_id, search_term):
+    """Busca un contacto por nombre o categoría"""
+    contacts = get_contacts(user_id)
+    search_lower = search_term.lower()
+
+    for c in contacts:
+        if search_lower in c["name"].lower() or search_lower in c.get("category", "").lower():
+            return c
+    return None
+
+def delete_contact(user_id, name):
+    """Elimina un contacto"""
+    contacts = load_contacts()
+    if user_id in contacts:
+        contacts[user_id] = [c for c in contacts[user_id] if c["name"].lower() != name.lower()]
+        save_contacts(contacts)
+        return True
+    return False
+
+def format_contacts_list(user_id):
+    """Formatea la lista de contactos para mostrar"""
+    contacts = get_contacts(user_id)
+    if not contacts:
+        return "📇 No tenés contactos guardados.\n\nPara agregar uno escribí:\n*guardar contacto: Dr. López 351123456*"
+
+    # Agrupar por categoría
+    by_category = {}
+    for c in contacts:
+        cat = c.get("category", "general").title()
+        if cat not in by_category:
+            by_category[cat] = []
+        by_category[cat].append(c)
+
+    result = "📇 *MIS CONTACTOS*\n"
+    for cat, cat_contacts in by_category.items():
+        result += f"\n*{cat}:*\n"
+        for c in cat_contacts:
+            result += f"• {c['name']}: {c['phone']}\n"
+
+    return result
+
+# ==================== TURNOS MÉDICOS ====================
+
+def load_appointments():
+    """Carga los turnos guardados"""
+    if os.path.exists(APPOINTMENTS_FILE):
+        try:
+            with open(APPOINTMENTS_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_appointments(appointments):
+    """Guarda los turnos"""
+    with open(APPOINTMENTS_FILE, "w") as f:
+        json.dump(appointments, f, ensure_ascii=False)
+
+def add_appointment(user_id, doctor, date_str, time_str, notes=None):
+    """Agrega un turno médico"""
+    appointments = load_appointments()
+    if user_id not in appointments:
+        appointments[user_id] = []
+
+    appointments[user_id].append({
+        "doctor": doctor,
+        "date": date_str,
+        "time": time_str,
+        "notes": notes,
+        "reminded_day_before": False,
+        "reminded_same_day": False,
+        "created": datetime.now(TIMEZONE).isoformat()
+    })
+    save_appointments(appointments)
+
+def get_appointments(user_id):
+    """Obtiene todos los turnos de un usuario"""
+    appointments = load_appointments()
+    return appointments.get(user_id, [])
+
+def get_upcoming_appointments(user_id):
+    """Obtiene turnos próximos (no pasados)"""
+    appointments = get_appointments(user_id)
+    today = datetime.now(TIMEZONE).date()
+
+    upcoming = []
+    for apt in appointments:
+        try:
+            apt_date = datetime.strptime(apt["date"], "%d/%m/%Y").date()
+            if apt_date >= today:
+                upcoming.append(apt)
+        except:
+            upcoming.append(apt)  # Si no puede parsear, lo incluye igual
+
+    # Ordenar por fecha
+    upcoming.sort(key=lambda x: datetime.strptime(x["date"], "%d/%m/%Y") if "/" in x["date"] else datetime.max)
+    return upcoming
+
+def delete_appointment(user_id, index):
+    """Elimina un turno por índice"""
+    appointments = load_appointments()
+    if user_id in appointments and 0 <= index < len(appointments[user_id]):
+        del appointments[user_id][index]
+        save_appointments(appointments)
+        return True
+    return False
+
+def format_appointments_list(user_id):
+    """Formatea la lista de turnos para mostrar"""
+    appointments = get_upcoming_appointments(user_id)
+    if not appointments:
+        return "🏥 No tenés turnos programados.\n\nPara agregar uno escribí:\n*turno con Dr. García el 15/2 a las 10hs*"
+
+    result = "🏥 *MIS TURNOS*\n\n"
+    for i, apt in enumerate(appointments, 1):
+        result += f"*{i}.* {apt['doctor']}\n"
+        result += f"   📅 {apt['date']} ⏰ {apt['time']}\n"
+        if apt.get("notes"):
+            result += f"   📝 {apt['notes']}\n"
+        result += "\n"
+
+    result += "_Para cancelar: 'cancelar turno 1'_"
+    return result
+
+def check_appointment_reminders():
+    """Verifica y envía recordatorios de turnos"""
+    print(f"[{datetime.now()}] Verificando recordatorios de turnos...")
+
+    appointments = load_appointments()
+    today = datetime.now(TIMEZONE).date()
+    tomorrow = today + timedelta(days=1)
+
+    for user_id, user_appointments in appointments.items():
+        for apt in user_appointments:
+            try:
+                apt_date = datetime.strptime(apt["date"], "%d/%m/%Y").date()
+
+                # Recordatorio día anterior
+                if apt_date == tomorrow and not apt.get("reminded_day_before"):
+                    message = f"📅 *RECORDATORIO DE TURNO*\n\n¡Mañana tenés turno!\n\n🏥 {apt['doctor']}\n📅 {apt['date']} ⏰ {apt['time']}"
+                    if apt.get("notes"):
+                        message += f"\n📝 {apt['notes']}"
+
+                    try:
+                        send_whatsapp_message(user_id, message)
+                        apt["reminded_day_before"] = True
+                        print(f"Recordatorio día anterior enviado a {user_id}")
+                    except Exception as e:
+                        print(f"Error enviando recordatorio: {e}")
+
+                # Recordatorio mismo día (8am)
+                if apt_date == today and not apt.get("reminded_same_day"):
+                    now = datetime.now(TIMEZONE)
+                    if now.hour >= 8:
+                        message = f"⏰ *TURNO HOY*\n\n🏥 {apt['doctor']}\n⏰ {apt['time']}"
+                        if apt.get("notes"):
+                            message += f"\n📝 {apt['notes']}"
+                        message += "\n\n_¡No te olvides!_"
+
+                        try:
+                            send_whatsapp_message(user_id, message)
+                            apt["reminded_same_day"] = True
+                            print(f"Recordatorio mismo día enviado a {user_id}")
+                        except Exception as e:
+                            print(f"Error enviando recordatorio: {e}")
+
+            except Exception as e:
+                print(f"Error procesando turno: {e}")
+
+    save_appointments(appointments)
 
 # ==================== UBICACIÓN ====================
 
@@ -2381,6 +2600,17 @@ def get_welcome_message():
 • "mis medicamentos" - ver lista
 • Respondé "sí" cuando te pregunte si tomaste
 
+🏥 *TURNOS MÉDICOS*
+• "turno con Dr. García el 15/2 a las 10hs"
+• "mis turnos" - ver próximos
+• "cancelar turno 1"
+
+📇 *CONTACTOS*
+• "guardar contacto: Dr. López 351123456"
+• "contacto médico: Emergencias 107"
+• "mis contactos" - ver directorio
+• "número del médico" - buscar
+
 📋 *TAREAS*
 • "agregar tarea: comprar leche"
 • "mis tareas"
@@ -2535,6 +2765,100 @@ def get_ai_response(user_message, user_id):
             number = '+' + number
         set_caregiver(user_id, number, is_primary=False)
         response = f"✅ Cuidador secundario agregado: {number}"
+        add_to_conversation(user_id, "assistant", response)
+        return response
+
+    # ==================== COMANDOS DE CONTACTOS ====================
+
+    # Guardar contacto: "guardar contacto: Dr. López 351123456" o "contacto médico: Dr. García 351999888"
+    contact_match = re.search(r'(?:guardar contacto|nuevo contacto|agregar contacto|contacto\s+(\w+))[:;]\s*(.+?)\s+(\+?\d[\d\s\-]{6,})', user_message, re.IGNORECASE)
+    if contact_match:
+        category = contact_match.group(1) or "general"
+        name = contact_match.group(2).strip()
+        phone = re.sub(r'[\s\-]', '', contact_match.group(3))
+        status = add_contact(user_id, name, phone, category)
+        response = f"📇 Contacto {status}: *{name}*\n📱 {phone}\n📁 Categoría: {category.title()}"
+        add_to_conversation(user_id, "assistant", response)
+        return response
+
+    # Ver contactos
+    if msg_lower in ["mis contactos", "contactos", "ver contactos", "directorio"]:
+        response = format_contacts_list(user_id)
+        add_to_conversation(user_id, "assistant", response)
+        return response
+
+    # Buscar contacto: "número del médico" o "teléfono de mamá"
+    contact_search = re.search(r'(?:número|telefono|teléfono|contacto)\s+(?:del?|de la?)?\s*(.+)', msg_lower)
+    if contact_search:
+        search_term = contact_search.group(1).strip()
+        contact = find_contact(user_id, search_term)
+        if contact:
+            response = f"📇 *{contact['name']}*\n📱 {contact['phone']}"
+        else:
+            response = f"❌ No encontré ningún contacto con '{search_term}'.\n\nEscribí *mis contactos* para ver todos."
+        add_to_conversation(user_id, "assistant", response)
+        return response
+
+    # Eliminar contacto
+    delete_contact_match = re.search(r'(?:eliminar|borrar|quitar)\s+contacto\s+(.+)', msg_lower)
+    if delete_contact_match:
+        name = delete_contact_match.group(1).strip()
+        if delete_contact(user_id, name):
+            response = f"✅ Contacto '{name}' eliminado."
+        else:
+            response = f"❌ No encontré el contacto '{name}'."
+        add_to_conversation(user_id, "assistant", response)
+        return response
+
+    # ==================== COMANDOS DE TURNOS MÉDICOS ====================
+
+    # Agregar turno: "turno con Dr. García el 15/2 a las 10hs" o "turno cardiólogo 20/2 15:30"
+    turno_match = re.search(r'turno\s+(?:con\s+)?(.+?)\s+(?:el\s+)?(\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)\s+(?:a las?\s+)?(\d{1,2}[:\.]?\d{0,2})\s*(?:hs?)?', user_message, re.IGNORECASE)
+    if turno_match:
+        doctor = turno_match.group(1).strip().title()
+        date_raw = turno_match.group(2)
+        time_raw = turno_match.group(3)
+
+        # Normalizar fecha
+        date_parts = re.split(r'[/-]', date_raw)
+        if len(date_parts) == 2:
+            year = datetime.now(TIMEZONE).year
+            date_str = f"{date_parts[0].zfill(2)}/{date_parts[1].zfill(2)}/{year}"
+        else:
+            year = date_parts[2] if len(date_parts[2]) == 4 else f"20{date_parts[2]}"
+            date_str = f"{date_parts[0].zfill(2)}/{date_parts[1].zfill(2)}/{year}"
+
+        # Normalizar hora
+        if ":" in time_raw or "." in time_raw:
+            time_str = time_raw.replace(".", ":")
+        else:
+            time_str = f"{time_raw}:00"
+
+        add_appointment(user_id, doctor, date_str, time_str)
+        response = f"🏥 Turno agendado:\n\n👨‍⚕️ {doctor}\n📅 {date_str}\n⏰ {time_str}\n\n_Te recordaré el día anterior y el mismo día._"
+        add_to_conversation(user_id, "assistant", response)
+        return response
+
+    # Ver turnos
+    if msg_lower in ["mis turnos", "turnos", "ver turnos", "próximos turnos", "proximos turnos"]:
+        response = format_appointments_list(user_id)
+        add_to_conversation(user_id, "assistant", response)
+        return response
+
+    # Cancelar turno
+    cancel_turno_match = re.search(r'(?:cancelar|eliminar|borrar)\s+turno\s+(\d+)', msg_lower)
+    if cancel_turno_match:
+        index = int(cancel_turno_match.group(1)) - 1
+        appointments = get_upcoming_appointments(user_id)
+        if 0 <= index < len(appointments):
+            apt = appointments[index]
+            # Encontrar el índice real en la lista completa
+            all_appointments = get_appointments(user_id)
+            real_index = all_appointments.index(apt)
+            delete_appointment(user_id, real_index)
+            response = f"✅ Turno cancelado: {apt['doctor']} - {apt['date']}"
+        else:
+            response = "❌ Número de turno inválido. Escribí *mis turnos* para ver la lista."
         add_to_conversation(user_id, "assistant", response)
         return response
 
@@ -2971,6 +3295,8 @@ scheduler.add_job(lambda: send_medication_reminder("noche"), "cron", hour=21, mi
 scheduler.add_job(send_daily_medication_report, "cron", hour=22, minute=0)
 # Reporte semanal los domingos a las 20:00
 scheduler.add_job(send_weekly_reports, "cron", day_of_week="sun", hour=20, minute=0)
+# Recordatorios de turnos médicos cada hora
+scheduler.add_job(check_appointment_reminders, "cron", minute=0)
 scheduler.start()
 
 if __name__ == "__main__":
