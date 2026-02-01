@@ -2561,7 +2561,7 @@ def process_actions(response_text, user_id):
         bullet_items = re.findall(r'[•\-\*]\s*([^\n•\-\*]+)', result)
         if bullet_items:
             shopping_items = [item.strip() for item in bullet_items if item.strip() and len(item.strip()) < 50]
-            logger.info(f"[SHOPPING FALLBACK] Detectados items por bullets: {shopping_items}")
+            print(f"[SHOPPING FALLBACK] Detectados items por bullets: {shopping_items}")
 
     if shopping_items:
         added_items = []
@@ -2572,7 +2572,7 @@ def process_actions(response_text, user_id):
             if item and len(item) > 1 and len(item) < 50:  # Solo items válidos
                 add_shopping_item(user_id, item)
                 added_items.append(item)
-                logger.info(f"[SHOPPING] Agregado: {item}")
+                print(f"[SHOPPING] Agregado: {item}")
         result = re.sub(r"\[COMPRA_AGREGAR\].*?\[/COMPRA_AGREGAR\]", "", result, flags=re.DOTALL)
         if len(added_items) == 1:
             result += f"\n\n✅ Agregado a la lista: {added_items[0]}"
