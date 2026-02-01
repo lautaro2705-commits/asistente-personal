@@ -443,6 +443,15 @@ def delete_task(user_id, task_id):
         return True
     return False
 
+def clear_all_tasks(user_id):
+    """Elimina TODAS las tareas de un usuario"""
+    tasks = load_tasks()
+    if user_id in tasks:
+        tasks[user_id] = []
+        save_tasks(tasks)
+        return True
+    return False
+
 def get_tasks(user_id, include_done=False):
     """Obtiene las tareas de un usuario"""
     tasks = load_tasks()
@@ -2085,8 +2094,11 @@ Para agregar TAREAS:
 Para completar TAREAS:
 [TAREA_COMPLETAR]<número>[/TAREA_COMPLETAR]
 
-Para eliminar TAREAS:
+Para eliminar una TAREA:
 [TAREA_ELIMINAR]<número>[/TAREA_ELIMINAR]
+
+Para VACIAR todas las tareas (eliminar todas):
+[TAREAS_VACIAR][/TAREAS_VACIAR]
 
 Para listar TAREAS:
 [TAREAS_LISTAR][/TAREAS_LISTAR]
@@ -2394,6 +2406,12 @@ def process_actions(response_text, user_id):
             result = re.sub(r"\[TAREA_ELIMINAR\]\d+\[/TAREA_ELIMINAR\]", "", result)
             result += f"\n\n✅ Tarea {task_id} eliminada"
 
+    # Procesar vaciar todas las tareas
+    if "[TAREAS_VACIAR][/TAREAS_VACIAR]" in result:
+        clear_all_tasks(user_id)
+        result = result.replace("[TAREAS_VACIAR][/TAREAS_VACIAR]", "")
+        result += "\n\n✅ Todas las tareas han sido eliminadas"
+
     # Procesar listar tareas
     if "[TAREAS_LISTAR][/TAREAS_LISTAR]" in result:
         result = result.replace("[TAREAS_LISTAR][/TAREAS_LISTAR]", "")
@@ -2667,30 +2685,16 @@ def send_whatsapp_message(to_number, message):
 
 
 def check_and_send_reminders():
-    """Revisa eventos próximos y envía recordatorios"""
-    print(f"[{datetime.now()}] Verificando recordatorios...")
-
-    if not registered_users:
-        return
-
-    events = get_upcoming_events(hours=1)
-    now = datetime.now(TIMEZONE)
-
-    for event_data in events:
-        event_time = event_data["datetime"]
-        if hasattr(event_time, "tzinfo") and event_time.tzinfo is None:
-            event_time = TIMEZONE.localize(event_time)
-
-        time_diff = (event_time - now).total_seconds() / 60
-
-        if 25 <= time_diff <= 35:
-            title = event_data["title"]
-            time_str = event_time.strftime("%H:%M")
-
-            for user_number in registered_users:
-                message = f"⏰ Recordatorio: '{title}' comienza a las {time_str} (en ~30 minutos)"
-                send_whatsapp_message(user_number, message)
-                print(f"Recordatorio enviado a {user_number}: {title}")
+    """Revisa eventos próximos y envía recordatorios
+    NOTA: Desactivado para eventos del calendario porque no tienen user_id asociado.
+    Los recordatorios personalizados (con [RECORDATORIO]) SÍ funcionan correctamente
+    porque están asociados al usuario que los crea.
+    """
+    print(f"[{datetime.now()}] Verificando recordatorios de calendario...")
+    # DESACTIVADO: Los eventos del calendario CalDAV no tienen user_id
+    # Por lo que los recordatorios se enviaban a TODOS los usuarios
+    # Los recordatorios personalizados funcionan via check_and_send_custom_reminders()
+    pass
 
 
 def is_new_user(user_id):
