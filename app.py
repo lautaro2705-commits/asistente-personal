@@ -520,8 +520,72 @@ def format_notes(user_id):
 
 # ==================== CLIMA ====================
 
+def get_weather_openmeteo(city="Cordoba,Argentina"):
+    """Obtiene el clima usando Open-Meteo (gratis, sin API key) como respaldo"""
+    try:
+        # Coordenadas de ciudades comunes
+        coords = {
+            "cordoba": (-31.4201, -64.1888),
+            "buenos aires": (-34.6037, -58.3816),
+            "rosario": (-32.9468, -60.6393),
+            "mendoza": (-32.8908, -68.8272),
+            "la plata": (-34.9205, -57.9536),
+        }
+
+        city_lower = city.split(",")[0].lower().strip()
+        lat, lon = coords.get(city_lower, (-31.4201, -64.1888))  # Default Córdoba
+
+        url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code&daily=temperature_2m_max,temperature_2m_min&timezone=America/Argentina/Buenos_Aires"
+
+        response = requests.get(url, timeout=10)
+        if response.status_code != 200:
+            return None
+
+        data = response.json()
+        current = data["current"]
+        daily = data["daily"]
+
+        temp = round(current["temperature_2m"])
+        feels_like = round(current["apparent_temperature"])
+        humidity = current["relative_humidity_2m"]
+        max_temp = round(daily["temperature_2m_max"][0])
+        min_temp = round(daily["temperature_2m_min"][0])
+
+        # Códigos de clima WMO
+        weather_codes = {
+            0: "Despejado ☀️",
+            1: "Mayormente despejado 🌤",
+            2: "Parcialmente nublado ⛅",
+            3: "Nublado ☁️",
+            45: "Niebla 🌫",
+            48: "Niebla con escarcha 🌫",
+            51: "Llovizna ligera 🌧",
+            53: "Llovizna 🌧",
+            55: "Llovizna intensa 🌧",
+            61: "Lluvia ligera 🌧",
+            63: "Lluvia 🌧",
+            65: "Lluvia intensa 🌧",
+            80: "Chubascos ligeros 🌦",
+            81: "Chubascos 🌦",
+            82: "Chubascos intensos 🌦",
+            95: "Tormenta ⛈",
+            96: "Tormenta con granizo ⛈",
+            99: "Tormenta fuerte con granizo ⛈",
+        }
+        desc = weather_codes.get(current["weather_code"], "Variable")
+
+        city_display = city.split(",")[0].title()
+        return f"""🌤 *Clima en {city_display}:*
+🌡 Temperatura: {temp}°C (sensación {feels_like}°C)
+📊 Máx: {max_temp}°C / Mín: {min_temp}°C
+💧 Humedad: {humidity}%
+📝 {desc}"""
+    except Exception as e:
+        print(f"Error Open-Meteo: {e}")
+        return None
+
 def get_weather(city="Cordoba,Argentina"):
-    """Obtiene el clima usando wttr.in (gratis, sin API key)"""
+    """Obtiene el clima usando wttr.in, con Open-Meteo como fallback"""
     try:
         # Limpiar el nombre de la ciudad
         city_clean = city.replace(" ", "+")
@@ -529,13 +593,13 @@ def get_weather(city="Cordoba,Argentina"):
 
         # Agregar User-Agent para evitar bloqueos
         headers = {
-            "User-Agent": "Mozilla/5.0 (compatible; AsistentePersonal/1.0)"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
-        response = requests.get(url, timeout=15, headers=headers)
+        response = requests.get(url, timeout=10, headers=headers)
 
         if response.status_code != 200:
-            print(f"Error clima: HTTP {response.status_code}")
-            return "No pude obtener el clima en este momento."
+            print(f"Error clima wttr.in: HTTP {response.status_code}, usando Open-Meteo")
+            return get_weather_openmeteo(city) or "No pude obtener el clima en este momento."
 
         data = response.json()
 
@@ -566,13 +630,11 @@ def get_weather(city="Cordoba,Argentina"):
 
         return weather_info
     except requests.exceptions.Timeout:
-        print("Error clima: Timeout")
-        return "No pude obtener el clima (tiempo agotado). Intentá de nuevo."
+        print("Error clima wttr.in: Timeout, usando Open-Meteo")
+        return get_weather_openmeteo(city) or "No pude obtener el clima en este momento."
     except Exception as e:
-        print(f"Error obteniendo clima: {e}")
-        import traceback
-        traceback.print_exc()
-        return "No pude obtener el clima en este momento."
+        print(f"Error obteniendo clima wttr.in: {e}, usando Open-Meteo")
+        return get_weather_openmeteo(city) or "No pude obtener el clima en este momento."
 
 # ==================== MEDICAMENTOS ====================
 
@@ -1972,6 +2034,21 @@ def send_morning_summary():
 
 SYSTEM_PROMPT = """Eres un asistente personal inteligente que ayuda a gestionar calendario, tareas, notas, gastos y más.
 
+FECHA Y HORA ACTUAL:
+- Hoy es: {today}
+- Hora actual: {current_time}
+
+IMPORTANTE sobre fechas:
+- Cuando el usuario mencione "el día 2", "el 15", etc., calcula correctamente qué día de la semana es
+- Si dice "el 2" y estamos en febrero 2026, el día 2 de febrero de 2026 es LUNES (no martes ni otro día)
+- SIEMPRE verifica el día de la semana correcto basándote en la fecha actual proporcionada
+- Si el usuario menciona una fecha que ya pasó este mes, asume el próximo mes
+
+IMPORTANTE sobre horarios:
+- Si el usuario dice una hora como "2:30" o "3:00" sin especificar AM/PM, asume que es una hora FUTURA del mismo día
+- Si la hora mencionada ya pasó hoy, pregunta si se refiere a mañana
+- Usa formato 24 horas internamente (ej: 14:30 para 2:30 PM)
+
 FUNCIONALIDADES DISPONIBLES:
 1. CALENDARIO: Agendar eventos
 2. TAREAS: Agregar, listar, completar y eliminar tareas
@@ -1982,12 +2059,6 @@ FUNCIONALIDADES DISPONIBLES:
 7. DÓLAR: Consultar cotización del dólar
 8. FÚTBOL: Noticias de Boca Juniors e Inter Miami
 9. CUARTETO: Bailes de cuarteto en Córdoba
-
-IMPORTANTE sobre horarios:
-- La hora actual es: {current_time}
-- Si el usuario dice una hora como "2:30" o "3:00" sin especificar AM/PM, asume que es una hora FUTURA del mismo día
-- Si la hora mencionada ya pasó hoy, pregunta si se refiere a mañana
-- Usa formato 24 horas internamente (ej: 14:30 para 2:30 PM)
 
 FORMATOS DE ACCIÓN (usa estos formatos exactos cuando corresponda):
 
@@ -3071,7 +3142,10 @@ def get_ai_response(user_message, user_id):
             return response_msg
 
     now = datetime.now(TIMEZONE)
-    today = now.strftime("%Y-%m-%d %A")
+    # Días de la semana en español
+    dias_semana = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+    dia_nombre = dias_semana[now.weekday()]
+    today = f"{now.strftime('%Y-%m-%d')} {dia_nombre} (día {now.day} del mes {now.month})"
     current_time = now.strftime("%H:%M")
 
     response = anthropic_client.messages.create(
