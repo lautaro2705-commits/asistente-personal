@@ -2967,14 +2967,6 @@ def whatsapp_webhook():
     message_body = request.values.get("Body", "")
     num_media = int(request.values.get("NumMedia", 0))
 
-    # LOG: Ver todos los parámetros que llegan de Twilio
-    print(f"=== WEBHOOK TWILIO ===")
-    print(f"From: {from_number}")
-    print(f"Body: {message_body}")
-    print(f"NumMedia: {num_media}")
-    print(f"Todos los parámetros: {dict(request.values)}")
-    print(f"======================")
-
     # Capturar coordenadas GPS si el usuario comparte ubicación
     latitude = request.values.get("Latitude", "")
     longitude = request.values.get("Longitude", "")
@@ -2983,9 +2975,7 @@ def whatsapp_webhook():
     if latitude and longitude:
         set_user_gps(from_number, latitude, longitude)
         location_shared = True
-        print(f"✅ Ubicación GPS guardada de {from_number}: {latitude}, {longitude}")
-    else:
-        print(f"❌ No se recibió Latitude/Longitude")
+        print(f"GPS guardado para {from_number}: {latitude}, {longitude}")
 
     print(f"Mensaje de {from_number}: {message_body} (Media: {num_media})")
 
