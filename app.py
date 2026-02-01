@@ -1082,6 +1082,15 @@ def clear_bought_items(user_id):
         return True
     return False
 
+def clear_all_shopping(user_id):
+    """Elimina TODA la lista de compras"""
+    shopping = load_shopping()
+    if user_id in shopping:
+        shopping[user_id] = []
+        save_shopping(shopping)
+        return True
+    return False
+
 def format_shopping_list(user_id):
     """Formatea la lista de compras"""
     shopping = load_shopping()
@@ -2137,8 +2146,21 @@ Para listar RECORDATORIOS:
 Para eliminar RECORDATORIO:
 [RECORDATORIO_ELIMINAR]<número>[/RECORDATORIO_ELIMINAR]
 
-Para agregar item a LISTA DE COMPRAS:
-[COMPRA_AGREGAR]<item>[/COMPRA_AGREGAR]
+Para agregar items a LISTA DE COMPRAS usa este tag POR CADA ITEM:
+[COMPRA_AGREGAR]nombre del item[/COMPRA_AGREGAR]
+
+⚠️ REGLA OBLIGATORIA: Cuando el usuario quiera agregar cosas a la lista de compras:
+1. Usa UN tag [COMPRA_AGREGAR] por CADA producto mencionado
+2. Los tags deben ir AL INICIO de tu respuesta
+3. SIN el tag el item NO se guarda - el tag es OBLIGATORIO
+
+EJEMPLO - si el usuario dice "agrega cacao, almendras, nueces, chips y polvo para hornear":
+[COMPRA_AGREGAR]cacao[/COMPRA_AGREGAR]
+[COMPRA_AGREGAR]almendras[/COMPRA_AGREGAR]
+[COMPRA_AGREGAR]nueces[/COMPRA_AGREGAR]
+[COMPRA_AGREGAR]chips[/COMPRA_AGREGAR]
+[COMPRA_AGREGAR]polvo para hornear[/COMPRA_AGREGAR]
+¡Listo! Agregué 5 productos a tu lista de compras.
 
 Para ver LISTA DE COMPRAS:
 [COMPRAS_LISTAR][/COMPRAS_LISTAR]
@@ -2151,6 +2173,9 @@ Para eliminar item de COMPRAS:
 
 Para limpiar items COMPRADOS:
 [COMPRAS_LIMPIAR][/COMPRAS_LIMPIAR]
+
+Para VACIAR TODA la lista de compras (eliminar todos los items):
+[COMPRAS_VACIAR][/COMPRAS_VACIAR]
 
 Para ver ANÁLISIS de gastos:
 [GASTOS_ANALISIS][/GASTOS_ANALISIS]
@@ -2527,13 +2552,32 @@ def process_actions(response_text, user_id):
             result = re.sub(r"\[RECORDATORIO_ELIMINAR\]\d+\[/RECORDATORIO_ELIMINAR\]", "", result)
             result += f"\n\n❌ No encontré el recordatorio {reminder_id}"
 
-    # Procesar agregar a lista de compras
-    shopping_add_match = re.search(r"\[COMPRA_AGREGAR\](.*?)\[/COMPRA_AGREGAR\]", result)
-    if shopping_add_match:
-        item = shopping_add_match.group(1).strip()
-        add_shopping_item(user_id, item)
-        result = re.sub(r"\[COMPRA_AGREGAR\].*?\[/COMPRA_AGREGAR\]", "", result)
-        result += f"\n\n✅ Agregado a la lista: {item}"
+    # Procesar agregar a lista de compras (puede haber múltiples items)
+    shopping_items = re.findall(r"\[COMPRA_AGREGAR\](.*?)\[/COMPRA_AGREGAR\]", result, re.DOTALL)
+
+    # FALLBACK: Si no hay tags pero el modelo dice "agregado/agregué" y lista items con bullets
+    if not shopping_items and ("agregado" in result.lower() or "agregué" in result.lower() or "he agregado" in result.lower()):
+        # Buscar items en formato bullet (• item o - item o * item)
+        bullet_items = re.findall(r'[•\-\*]\s*([^\n•\-\*]+)', result)
+        if bullet_items:
+            shopping_items = [item.strip() for item in bullet_items if item.strip() and len(item.strip()) < 50]
+            logger.info(f"[SHOPPING FALLBACK] Detectados items por bullets: {shopping_items}")
+
+    if shopping_items:
+        added_items = []
+        for item in shopping_items:
+            item = item.strip()
+            # Limpiar caracteres extra y emojis comunes
+            item = re.sub(r'[✓✔️✅]', '', item).strip()
+            if item and len(item) > 1 and len(item) < 50:  # Solo items válidos
+                add_shopping_item(user_id, item)
+                added_items.append(item)
+                logger.info(f"[SHOPPING] Agregado: {item}")
+        result = re.sub(r"\[COMPRA_AGREGAR\].*?\[/COMPRA_AGREGAR\]", "", result, flags=re.DOTALL)
+        if len(added_items) == 1:
+            result += f"\n\n✅ Agregado a la lista: {added_items[0]}"
+        elif len(added_items) > 1:
+            result += f"\n\n✅ Agregados a la lista ({len(added_items)} items): {', '.join(added_items)}"
 
     # Procesar listar compras
     if "[COMPRAS_LISTAR][/COMPRAS_LISTAR]" in result:
@@ -2564,6 +2608,12 @@ def process_actions(response_text, user_id):
         clear_bought_items(user_id)
         result = result.replace("[COMPRAS_LIMPIAR][/COMPRAS_LIMPIAR]", "")
         result += "\n\n✅ Items comprados eliminados de la lista"
+
+    # Procesar vaciar toda la lista
+    if "[COMPRAS_VACIAR][/COMPRAS_VACIAR]" in result:
+        clear_all_shopping(user_id)
+        result = result.replace("[COMPRAS_VACIAR][/COMPRAS_VACIAR]", "")
+        result += "\n\n✅ Lista de compras vaciada completamente"
 
     # Procesar análisis de gastos
     if "[GASTOS_ANALISIS][/GASTOS_ANALISIS]" in result:
