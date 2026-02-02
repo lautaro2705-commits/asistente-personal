@@ -1709,6 +1709,39 @@ def add_expense(user_id, amount, description, category="General"):
     save_expenses(expenses)
     return expense
 
+def delete_expense(user_id, expense_id):
+    """Elimina un gasto por ID"""
+    expenses = load_expenses()
+    if user_id in expenses:
+        original_len = len(expenses[user_id])
+        expenses[user_id] = [e for e in expenses[user_id] if e["id"] != expense_id]
+        if len(expenses[user_id]) < original_len:
+            # Reordenar IDs
+            for i, exp in enumerate(expenses[user_id]):
+                exp["id"] = i + 1
+            save_expenses(expenses)
+            return True
+    return False
+
+def list_expenses(user_id, limit=10):
+    """Lista los últimos gastos con sus IDs"""
+    expenses = load_expenses()
+    user_expenses = expenses.get(user_id, [])
+
+    if not user_expenses:
+        return "📊 No tienes gastos registrados."
+
+    # Ordenar por fecha (más recientes primero) y limitar
+    recent = sorted(user_expenses, key=lambda x: x.get("date", ""), reverse=True)[:limit]
+
+    result = "📊 *Tus últimos gastos:*\n\n"
+    for e in recent:
+        fecha = e.get("date", "")[:10]  # Solo fecha sin hora
+        result += f"{e['id']}. ${e['amount']:,.0f} - {e['description']} ({e.get('category', 'General')}) - {fecha}\n"
+
+    result += "\n_Para eliminar: 'eliminar gasto 1'_"
+    return result
+
 def get_expenses_summary(user_id, days=30):
     """Obtiene resumen de gastos del mes"""
     expenses = load_expenses()
@@ -2122,6 +2155,12 @@ Para registrar GASTOS:
 [GASTO_AGREGAR]monto|descripción|categoría[/GASTO_AGREGAR]
 Categorías: Comida, Transporte, Entretenimiento, Servicios, Compras, Salud, Otros
 
+Para ver lista de GASTOS (con IDs para eliminar):
+[GASTOS_LISTAR][/GASTOS_LISTAR]
+
+Para ELIMINAR un gasto:
+[GASTO_ELIMINAR]<número>[/GASTO_ELIMINAR]
+
 Para ver resumen de GASTOS:
 [GASTOS_RESUMEN][/GASTOS_RESUMEN]
 
@@ -2467,6 +2506,22 @@ def process_actions(response_text, user_id):
                 result += "\n\n❌ No pude registrar el gasto. Formato: monto|descripción|categoría"
         else:
             result += "\n\n❌ Formato incorrecto. Usa: monto|descripción|categoría"
+
+    # Procesar listar gastos
+    if "[GASTOS_LISTAR][/GASTOS_LISTAR]" in result:
+        result = result.replace("[GASTOS_LISTAR][/GASTOS_LISTAR]", "")
+        result += f"\n\n{list_expenses(user_id)}"
+
+    # Procesar eliminar gasto
+    gasto_del_match = re.search(r"\[GASTO_ELIMINAR\](\d+)\[/GASTO_ELIMINAR\]", result)
+    if gasto_del_match:
+        gasto_id = int(gasto_del_match.group(1))
+        if delete_expense(user_id, gasto_id):
+            result = re.sub(r"\[GASTO_ELIMINAR\]\d+\[/GASTO_ELIMINAR\]", "", result)
+            result += f"\n\n✅ Gasto {gasto_id} eliminado"
+        else:
+            result = re.sub(r"\[GASTO_ELIMINAR\]\d+\[/GASTO_ELIMINAR\]", "", result)
+            result += f"\n\n❌ No encontré el gasto {gasto_id}"
 
     # Procesar resumen de gastos
     if "[GASTOS_RESUMEN][/GASTOS_RESUMEN]" in result:
