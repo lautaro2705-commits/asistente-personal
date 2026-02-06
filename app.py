@@ -66,8 +66,15 @@ registered_users = {}
 # Zona horaria
 TIMEZONE = pytz.timezone("America/Argentina/Buenos_Aires")
 
-# Archivos de datos
-DATA_DIR = os.path.dirname(os.path.abspath(__file__))
+# Archivos de datos - usar volumen persistente de Railway si está disponible
+# En Railway, configurar variable de entorno DATA_DIR=/data para usar volumen persistente
+# Esto evita que los datos se pierdan al hacer redeploy
+DATA_DIR = os.environ.get("DATA_DIR", os.path.dirname(os.path.abspath(__file__)))
+
+# Crear directorio si no existe (importante para volúmenes de Railway)
+if not os.path.exists(DATA_DIR):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    print(f"[INIT] Directorio de datos creado: {DATA_DIR}")
 TASKS_FILE = os.path.join(DATA_DIR, "tasks.json")
 NOTES_FILE = os.path.join(DATA_DIR, "notes.json")
 CONVERSATIONS_FILE = os.path.join(DATA_DIR, "conversations.json")
@@ -77,6 +84,30 @@ WELLNESS_CHECK_FILE = os.path.join(DATA_DIR, "wellness_checks.json")
 USER_ACTIVITY_FILE = os.path.join(DATA_DIR, "user_activity.json")
 CONTACTS_FILE = os.path.join(DATA_DIR, "contacts.json")
 APPOINTMENTS_FILE = os.path.join(DATA_DIR, "appointments.json")
+
+# Log de ubicación de datos al iniciar
+print(f"[INIT] Directorio de datos: {DATA_DIR}")
+print(f"[INIT] Persistencia Railway: {'SI' if os.environ.get('DATA_DIR') else 'NO (local)'}")
+
+def initialize_data_files():
+    """Verifica que existan todos los archivos de datos necesarios"""
+    data_files = [
+        TASKS_FILE, NOTES_FILE, CONVERSATIONS_FILE, CAREGIVERS_FILE,
+        USER_PROFILES_FILE, WELLNESS_CHECK_FILE, USER_ACTIVITY_FILE,
+        CONTACTS_FILE, APPOINTMENTS_FILE
+    ]
+
+    for file_path in data_files:
+        if not os.path.exists(file_path):
+            # Crear archivo vacío con estructura JSON válida
+            with open(file_path, "w") as f:
+                json.dump({}, f)
+            print(f"[INIT] Archivo creado: {os.path.basename(file_path)}")
+        else:
+            print(f"[INIT] Archivo existente: {os.path.basename(file_path)}")
+
+# Inicializar archivos de datos al arrancar
+initialize_data_files()
 
 # ==================== PERFILES DE USUARIO ====================
 
@@ -174,10 +205,12 @@ def mark_wellness_responded(user_id, response):
         save_wellness_checks(checks)
 
 def send_wellness_check():
-    """Envía chequeo de bienestar a usuarios que tienen cuidador"""
-    print(f"[{datetime.now()}] Enviando chequeos de bienestar...")
+    """Envía chequeo de seguridad/bienestar a usuarios que tienen cuidador"""
+    print(f"[{datetime.now()}] Enviando chequeos de seguridad...")
 
     caregivers = load_caregivers()
+    now = datetime.now(TIMEZONE)
+    is_morning = now.hour < 12
 
     for user_id in caregivers.keys():
         # Solo enviar a usuarios que tienen cuidador configurado
@@ -185,17 +218,27 @@ def send_wellness_check():
         if not caregiver:
             continue
 
-        # Verificar si ya respondió hoy
+        # Verificar si ya respondió en esta ventana de tiempo
         pending = get_wellness_pending(user_id)
-        if pending and pending.get("responded"):
-            continue
+        if pending:
+            # Si ya respondió hoy, no enviar más
+            if pending.get("responded"):
+                continue
+            # Si ya hay uno pendiente de las últimas 4 horas, no enviar duplicado
+            sent_at = datetime.fromisoformat(pending["sent_at"])
+            if (now - sent_at).total_seconds() < 4 * 3600:
+                continue
 
-        message = "¡Buen día! ☀️\n\n¿Cómo te sentís hoy?\n\n👍 Respondé *bien*, *mal* o contame cómo estás."
+        # Mensaje diferente según la hora
+        if is_morning:
+            message = "☀️ *Chequeo de seguridad matutino*\n\n¿Cómo te sentís hoy?\n\n👍 Respondé *bien*, *mal* o contame cómo estás.\n\n_Si no respondés en 30 min, se avisará a tu cuidador_"
+        else:
+            message = "🌤️ *Chequeo de seguridad vespertino*\n\n¿Todo bien?\n\n👍 Respondé *bien* o contame cómo estás.\n\n_Si no respondés en 30 min, se avisará a tu cuidador_"
 
         try:
             send_whatsapp_message(user_id, message)
             set_wellness_pending(user_id)
-            print(f"Chequeo de bienestar enviado a {user_id}")
+            print(f"Chequeo de seguridad enviado a {user_id}")
         except Exception as e:
             print(f"Error enviando chequeo: {e}")
 
@@ -205,6 +248,7 @@ def check_wellness_responses():
 
     checks = load_wellness_checks()
     now = datetime.now(TIMEZONE)
+    updated = False
 
     for user_id, check in checks.items():
         if check.get("responded") or check.get("alerted"):
@@ -216,20 +260,34 @@ def check_wellness_responses():
         sent_at = datetime.fromisoformat(check["sent_at"])
         minutes_passed = (now - sent_at).total_seconds() / 60
 
-        if minutes_passed >= 30:
-            # Alertar al cuidador
+        # A los 15 minutos: enviar recordatorio al usuario
+        if minutes_passed >= 15 and not check.get("reminder_sent"):
+            try:
+                reminder_msg = "🔔 *Recordatorio*\n\n¿Todo bien? No recibí tu respuesta al chequeo de bienestar.\n\n👍 Respondé *bien* o contame cómo estás."
+                send_whatsapp_message(user_id, reminder_msg)
+                check["reminder_sent"] = True
+                updated = True
+                print(f"Recordatorio de bienestar enviado a {user_id}")
+            except Exception as e:
+                print(f"Error enviando recordatorio: {e}")
+
+        # A los 30 minutos: alertar al cuidador
+        elif minutes_passed >= 30:
             caregiver = get_caregiver(user_id)
             if caregiver:
                 user_display = user_id.replace('whatsapp:', '')
-                alert_msg = f"⚠️ *Alerta de bienestar*\n\n{user_display} no respondió al chequeo matutino después de 30 minutos.\n\n📅 {now.strftime('%d/%m/%Y %H:%M')}"
+                alert_msg = f"⚠️ *Alerta de bienestar*\n\n{user_display} no respondió al chequeo de seguridad después de 30 minutos.\n\n📅 {now.strftime('%d/%m/%Y %H:%M')}\n\n_Se enviaron 2 mensajes sin respuesta_"
 
                 try:
                     send_whatsapp_message(caregiver, alert_msg)
                     check["alerted"] = True
-                    save_wellness_checks(checks)
+                    updated = True
                     print(f"Alerta de bienestar enviada al cuidador de {user_id}")
                 except Exception as e:
                     print(f"Error enviando alerta de bienestar: {e}")
+
+    if updated:
+        save_wellness_checks(checks)
 
 # ==================== REGISTRO DE ACTIVIDAD ====================
 
@@ -3462,8 +3520,9 @@ scheduler.add_job(check_medication_confirmations, "interval", minutes=1)
 scheduler.add_job(check_wellness_responses, "interval", minutes=5)
 # Verificar inactividad inusual a las 6PM
 scheduler.add_job(check_user_inactivity, "cron", hour=18, minute=0)
-# Chequeo de bienestar a las 9:00 AM (solo adultos mayores)
+# Chequeo de bienestar/seguridad a las 9:00 AM y 5:00 PM (usuarios con cuidador)
 scheduler.add_job(send_wellness_check, "cron", hour=9, minute=0)
+scheduler.add_job(send_wellness_check, "cron", hour=17, minute=0)
 # Recordatorio de hidratación cada 3 horas (10AM, 1PM, 4PM)
 scheduler.add_job(send_hydration_reminder, "cron", hour=10, minute=0)
 scheduler.add_job(send_hydration_reminder, "cron", hour=13, minute=0)

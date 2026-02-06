@@ -7,5 +7,6 @@
     "startCommand": "gunicorn app:app --bind 0.0.0.0:$PORT",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10
-  }
+  },
+  "$comment_persistencia": "IMPORTANTE: Para persistencia de datos, crear un Volume en Railway montado en /data y agregar variable de entorno DATA_DIR=/data"
 }
