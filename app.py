@@ -3428,23 +3428,6 @@ def whatsapp_webhook():
 
     print(f"Mensaje de {from_number}: {message_body} (Media: {num_media})")
 
-    # === ROUTING: Reenviar numeros desconocidos al bot de ventas de Tijuca ===
-    personal_numbers = [n.strip() for n in os.getenv("PERSONAL_NUMBERS", "").split(",") if n.strip()]
-    tijuca_bot_url = os.getenv("TIJUCA_BOT_URL", "")
-
-    if personal_numbers and tijuca_bot_url and from_number not in personal_numbers:
-        print(f"Reenviando mensaje de {from_number} a Tijuca Bot: {tijuca_bot_url}")
-        try:
-            requests.post(
-                f"{tijuca_bot_url}/whatsapp",
-                data=request.form,
-                timeout=10
-            )
-        except Exception as e:
-            print(f"Error reenviando a Tijuca Bot: {e}")
-        return "", 200
-    # === FIN ROUTING ===
-
     # Registrar usuario para recordatorios
     if from_number and from_number not in registered_users:
         registered_users[from_number] = True
