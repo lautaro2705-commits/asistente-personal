@@ -2322,6 +2322,25 @@ INSTRUCCIONES:
 - Si dice "análisis de gastos" o "cómo voy con los gastos", muestra análisis detallado
 - Si dice "estoy en X" o "mi ubicación es X" o "cambiar ubicación a X", guarda la ubicación para el clima
 
+COMPRENSIÓN NATURAL DE COMANDOS (acepta variaciones):
+Entiende estas variaciones comunes:
+- "che" = hola, atención
+- "porfa", "por favor", "dale" = solicitud amable
+- "necesito", "quiero", "tengo que" = agregar tarea
+- "acordate", "no te olvides" = recordatorio
+- "poneme", "anotame" = agregar tarea/nota
+- "tirá", "pasame" = mostrar información
+- "cómo viene", "qué onda" = estado/resumen
+- "contame" = información
+- "fijate" = verificar/buscar
+- "mandame" = enviar/mostrar
+- "avisame", "chiflame" = recordatorio
+- "borrar todo", "vaciar" = eliminar todos los items
+- "limpiar", "sacar" = eliminar
+- "cuánto tengo", "cómo voy" = resumen de gastos
+- "qué me falta" = lista de compras
+- "super", "súper", "supermercado", "mandado" = lista de compras
+
 Hoy es: {today}
 """
 
@@ -2783,8 +2802,21 @@ def split_message(message, max_length=1500):
 
     return parts
 
-def send_whatsapp_message(to_number, message):
-    """Envía un mensaje de WhatsApp (divide si es muy largo)"""
+def send_whatsapp_message(to_number, message, respect_dnd=False, is_emergency=False):
+    """Envía un mensaje de WhatsApp (divide si es muy largo)
+
+    Args:
+        to_number: Número de WhatsApp destino
+        message: Mensaje a enviar
+        respect_dnd: Si True, no envía si el usuario tiene modo no molestar activo
+        is_emergency: Si True, envía aunque haya modo no molestar
+    """
+    # Verificar modo no molestar (solo si respect_dnd y no es emergencia)
+    if respect_dnd and not is_emergency:
+        if is_dnd_active(to_number):
+            print(f"[DND] Mensaje no enviado a {to_number} - Modo no molestar activo")
+            return False
+
     try:
         parts = split_message(message)
         for part in parts:
@@ -2880,6 +2912,18 @@ def get_welcome_message():
 • "agregar cuidador +54..." - secundario
 • "ayuda" - alertar a tu cuidador
 
+📞 *VIDEOLLAMADA*
+• "llamar a [contacto]" - link de WhatsApp
+• "llamar a mi cuidador"
+
+🌙 *MODO NOCTURNO*
+• "activar modo nocturno" - silencio de 22 a 8
+• "no molestar de 23 a 7" - personalizado
+• "desactivar no molestar"
+
+🎓 *TUTORIAL*
+• "tutorial" - aprender a usarme
+
 🎤 *Podés enviarme mensajes de voz* y los entiendo perfectamente."""
 
 # ==================== HISTORIAL SEMANAL PARA CUIDADOR ====================
@@ -2951,6 +2995,330 @@ def send_weekly_reports():
         except Exception as e:
             print(f"Error enviando reporte semanal: {e}")
 
+# ==================== RESUMEN DIARIO PARA CUIDADOR ====================
+
+def generate_daily_summary(user_id):
+    """Genera resumen diario de actividad de un usuario para el cuidador"""
+    now = datetime.now(TIMEZONE)
+    today = now.strftime("%Y-%m-%d")
+    user_display = user_id.replace('whatsapp:', '')
+
+    summary = f"📋 *Resumen del día*\n"
+    summary += f"👤 {user_display}\n"
+    summary += f"📅 {now.strftime('%d/%m/%Y')}\n\n"
+
+    # Actividad de mensajes
+    activity = load_user_activity()
+    if user_id in activity:
+        messages_today = activity[user_id].get("daily_messages", {}).get(today, 0)
+        last_seen = activity[user_id].get("last_seen")
+        if last_seen:
+            last_seen_dt = datetime.fromisoformat(last_seen)
+            summary += f"📱 *Actividad:* {messages_today} mensajes\n"
+            summary += f"⏰ *Última conexión:* {last_seen_dt.strftime('%H:%M')}\n\n"
+
+    # Medicamentos del día
+    meds = load_medications()
+    if user_id in meds:
+        med_log = meds[user_id].get("log", [])
+        today_log = [e for e in med_log if e.get("date", "") == today]
+        med_list = meds[user_id].get("medications", [])
+
+        if med_list:
+            summary += f"💊 *Medicamentos:*\n"
+            if today_log:
+                for entry in today_log:
+                    summary += f"   ✅ {entry.get('time', 'N/A')} - Confirmado\n"
+            else:
+                summary += f"   ⚠️ Sin confirmaciones hoy\n"
+            summary += "\n"
+
+    # Chequeo de bienestar
+    checks = load_wellness_checks()
+    if user_id in checks:
+        check = checks[user_id]
+        if check.get("date") == today:
+            if check.get("responded"):
+                summary += f"😊 *Bienestar:* {check.get('response', 'Respondido')}\n"
+            else:
+                summary += f"⚠️ *Bienestar:* No respondió al chequeo\n"
+
+    # Tareas completadas
+    tasks = load_tasks()
+    if user_id in tasks:
+        completed_today = [t for t in tasks[user_id] if t.get("completed") and t.get("completed_date", "").startswith(today)]
+        pending = [t for t in tasks[user_id] if not t.get("completed")]
+        if completed_today or pending:
+            summary += f"\n📝 *Tareas:* {len(completed_today)} completadas, {len(pending)} pendientes\n"
+
+    summary += "\n_Resumen automático de las 21:00_"
+    return summary
+
+def send_daily_summaries():
+    """Envía resumen diario a los cuidadores a las 21:00"""
+    print(f"[{datetime.now()}] Enviando resúmenes diarios a cuidadores...")
+
+    caregivers = load_caregivers()
+
+    for user_id in caregivers.keys():
+        caregiver = get_caregiver(user_id)
+        if not caregiver:
+            continue
+
+        try:
+            summary = generate_daily_summary(user_id)
+            send_whatsapp_message(caregiver, summary)
+            print(f"Resumen diario enviado al cuidador de {user_id}")
+        except Exception as e:
+            print(f"Error enviando resumen diario: {e}")
+
+# ==================== FOTOS FAMILIARES ====================
+
+PHOTOS_FILE = os.path.join(DATA_DIR, "family_photos.json")
+
+def load_family_photos():
+    """Carga las fotos familiares guardadas"""
+    if os.path.exists(PHOTOS_FILE):
+        try:
+            with open(PHOTOS_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_family_photos(photos):
+    """Guarda las fotos familiares"""
+    with open(PHOTOS_FILE, "w") as f:
+        json.dump(photos, f, ensure_ascii=False)
+
+def add_family_photo(user_id, name, url, relation=None):
+    """Agrega una foto familiar"""
+    photos = load_family_photos()
+    if user_id not in photos:
+        photos[user_id] = []
+
+    photo = {
+        "id": len(photos[user_id]) + 1,
+        "name": name,
+        "url": url,
+        "relation": relation,
+        "added_at": datetime.now(TIMEZONE).isoformat()
+    }
+    photos[user_id].append(photo)
+    save_family_photos(photos)
+    return photo
+
+def get_family_photos(user_id, search_term=None):
+    """Obtiene fotos familiares, opcionalmente filtradas"""
+    photos = load_family_photos()
+    user_photos = photos.get(user_id, [])
+
+    if search_term:
+        search_lower = search_term.lower()
+        return [p for p in user_photos if search_lower in p["name"].lower() or (p.get("relation") and search_lower in p["relation"].lower())]
+    return user_photos
+
+# ==================== MODO NO MOLESTAR ====================
+
+DND_FILE = os.path.join(DATA_DIR, "do_not_disturb.json")
+
+def load_dnd_settings():
+    """Carga configuración de no molestar"""
+    if os.path.exists(DND_FILE):
+        try:
+            with open(DND_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_dnd_settings(settings):
+    """Guarda configuración de no molestar"""
+    with open(DND_FILE, "w") as f:
+        json.dump(settings, f, ensure_ascii=False)
+
+def set_dnd(user_id, start_hour, end_hour):
+    """Configura horario de no molestar"""
+    settings = load_dnd_settings()
+    settings[user_id] = {
+        "enabled": True,
+        "start_hour": start_hour,
+        "end_hour": end_hour
+    }
+    save_dnd_settings(settings)
+
+def disable_dnd(user_id):
+    """Desactiva modo no molestar"""
+    settings = load_dnd_settings()
+    if user_id in settings:
+        settings[user_id]["enabled"] = False
+        save_dnd_settings(settings)
+
+def is_dnd_active(user_id):
+    """Verifica si el modo no molestar está activo"""
+    settings = load_dnd_settings()
+    if user_id not in settings or not settings[user_id].get("enabled"):
+        return False
+
+    now = datetime.now(TIMEZONE)
+    current_hour = now.hour
+    start = settings[user_id].get("start_hour", 22)
+    end = settings[user_id].get("end_hour", 8)
+
+    # Manejar rango que cruza medianoche (ej: 22:00 a 08:00)
+    if start > end:
+        return current_hour >= start or current_hour < end
+    else:
+        return start <= current_hour < end
+
+def get_dnd_status(user_id):
+    """Obtiene el estado del modo no molestar"""
+    settings = load_dnd_settings()
+    if user_id not in settings:
+        return None
+    return settings[user_id]
+
+# ==================== TUTORIAL INTERACTIVO ====================
+
+TUTORIAL_FILE = os.path.join(DATA_DIR, "tutorial_progress.json")
+
+def load_tutorial_progress():
+    """Carga progreso del tutorial"""
+    if os.path.exists(TUTORIAL_FILE):
+        try:
+            with open(TUTORIAL_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_tutorial_progress(progress):
+    """Guarda progreso del tutorial"""
+    with open(TUTORIAL_FILE, "w") as f:
+        json.dump(progress, f, ensure_ascii=False)
+
+def get_tutorial_step(user_id):
+    """Obtiene el paso actual del tutorial"""
+    progress = load_tutorial_progress()
+    return progress.get(user_id, {}).get("step", 0)
+
+def set_tutorial_step(user_id, step):
+    """Establece el paso del tutorial"""
+    progress = load_tutorial_progress()
+    if user_id not in progress:
+        progress[user_id] = {}
+    progress[user_id]["step"] = step
+    progress[user_id]["updated_at"] = datetime.now(TIMEZONE).isoformat()
+    save_tutorial_progress(progress)
+
+def mark_tutorial_complete(user_id):
+    """Marca el tutorial como completado"""
+    progress = load_tutorial_progress()
+    if user_id not in progress:
+        progress[user_id] = {}
+    progress[user_id]["completed"] = True
+    progress[user_id]["completed_at"] = datetime.now(TIMEZONE).isoformat()
+    save_tutorial_progress(progress)
+
+def is_tutorial_complete(user_id):
+    """Verifica si el usuario completó el tutorial"""
+    progress = load_tutorial_progress()
+    return progress.get(user_id, {}).get("completed", False)
+
+TUTORIAL_STEPS = [
+    {
+        "step": 1,
+        "title": "👋 ¡Bienvenido!",
+        "message": """¡Hola! Soy tu asistente personal. Te voy a enseñar cómo usarme.
+
+*Paso 1: Agregar una tarea*
+
+Escribí algo como:
+• "agregar tarea comprar leche"
+• "tengo que llamar al médico"
+
+Probá ahora agregando una tarea 👇""",
+        "trigger": ["agregar tarea", "tengo que", "debo", "nueva tarea"]
+    },
+    {
+        "step": 2,
+        "title": "✅ ¡Muy bien!",
+        "message": """Excelente, aprendiste a crear tareas.
+
+*Paso 2: Lista de compras*
+
+También puedo manejar tu lista del supermercado:
+• "agregar leche a la lista"
+• "comprar pan, huevos y queso"
+
+Probá agregar algo a la lista 👇""",
+        "trigger": ["agregar", "comprar", "lista"]
+    },
+    {
+        "step": 3,
+        "title": "🛒 ¡Perfecto!",
+        "message": """Ya sabés usar la lista de compras.
+
+*Paso 3: Recordatorios*
+
+Puedo recordarte cosas importantes:
+• "recordame en 1 hora tomar la pastilla"
+• "recordame mañana a las 10 llamar a mamá"
+
+Probá crear un recordatorio 👇""",
+        "trigger": ["recordame", "recordar", "avisame"]
+    },
+    {
+        "step": 4,
+        "title": "⏰ ¡Genial!",
+        "message": """Los recordatorios te ayudarán a no olvidar nada.
+
+*Paso 4: Emergencias*
+
+Si necesitás ayuda urgente, podés configurar un cuidador:
+• "mi cuidador es +54XXXXXXXXXX"
+
+Después, si escribís *ayuda*, se le avisará inmediatamente.
+
+Escribí *terminar tutorial* cuando estés listo.""",
+        "trigger": ["terminar tutorial", "listo", "entendido", "ok"]
+    }
+]
+
+def get_tutorial_message(step):
+    """Obtiene el mensaje del tutorial para un paso"""
+    for t in TUTORIAL_STEPS:
+        if t["step"] == step:
+            return t["message"]
+    return None
+
+def check_tutorial_trigger(user_id, message):
+    """Verifica si el mensaje activa el siguiente paso del tutorial"""
+    current_step = get_tutorial_step(user_id)
+    if current_step >= len(TUTORIAL_STEPS):
+        return None
+
+    step_info = TUTORIAL_STEPS[current_step]
+    msg_lower = message.lower()
+
+    for trigger in step_info.get("trigger", []):
+        if trigger in msg_lower:
+            # Avanzar al siguiente paso
+            next_step = current_step + 1
+            if next_step >= len(TUTORIAL_STEPS):
+                mark_tutorial_complete(user_id)
+                return "🎉 *¡Felicitaciones!*\n\nCompletaste el tutorial. Ya sabés lo básico para usar el asistente.\n\nEscribí *menú* en cualquier momento para ver todas las funciones disponibles.\n\n¡Estoy acá para ayudarte!"
+            else:
+                set_tutorial_step(user_id, next_step)
+                return get_tutorial_message(next_step)
+
+    return None
+
+def start_tutorial(user_id):
+    """Inicia el tutorial para un usuario"""
+    set_tutorial_step(user_id, 1)
+    return get_tutorial_message(1)
+
 def get_ai_response(user_message, user_id):
     """Obtiene respuesta de Claude"""
     # Registrar actividad del usuario
@@ -2968,8 +3336,30 @@ def get_ai_response(user_message, user_id):
 
     msg_lower = user_message.lower().strip()
 
+    # Normalizar expresiones coloquiales argentinas
+    msg_normalized = msg_lower
+    msg_normalized = re.sub(r'^che\s+', '', msg_normalized)  # Remover "che" al inicio
+    msg_normalized = re.sub(r'\s+porfa$', '', msg_normalized)  # Remover "porfa" al final
+    msg_normalized = re.sub(r'\s+por favor$', '', msg_normalized)
+    msg_normalized = re.sub(r'^dale\s+', '', msg_normalized)  # Remover "dale" al inicio
+    msg_normalized = re.sub(r'^fijate\s+', '', msg_normalized)  # "fijate" = verificar
+
+    # Sinónimos para lista de compras
+    shopping_synonyms = ["super", "súper", "supermercado", "mandado", "mandados", "qué me falta", "que me falta", "qué falta", "que falta comprar"]
+    if any(syn in msg_lower for syn in shopping_synonyms) and "lista" not in msg_lower:
+        response = format_shopping_list(user_id)
+        add_to_conversation(user_id, "assistant", response)
+        return response
+
+    # Sinónimos para ver gastos
+    expense_synonyms = ["cuánto gasté", "cuanto gaste", "cómo voy con la plata", "como voy con la plata", "cuánto llevo gastado", "cuanto llevo gastado"]
+    if any(syn in msg_lower for syn in expense_synonyms):
+        expenses_summary = get_expenses_summary(user_id)
+        add_to_conversation(user_id, "assistant", expenses_summary)
+        return expenses_summary
+
     # Si es usuario nuevo y saluda, mostrar bienvenida
-    greeting_words = ["hola", "buenas", "buen dia", "buen día", "buenos dias", "buenos días", "hey", "hello", "hi", "que tal", "qué tal"]
+    greeting_words = ["hola", "buenas", "buen dia", "buen día", "buenos dias", "buenos días", "hey", "hello", "hi", "que tal", "qué tal", "che"]
     if is_first_message and any(word in msg_lower for word in greeting_words):
         welcome = get_welcome_message_short()
         add_to_conversation(user_id, "assistant", welcome)
@@ -3167,6 +3557,108 @@ def get_ai_response(user_message, user_id):
         # Responder al usuario
         caregiver_name = get_caregiver_name(user_id) or "tu cuidador"
         response_msg = f"🆘 Tu mensaje de ayuda ha sido enviado a *{caregiver_name}*. Pronto se pondrá en contacto contigo.\n\n¿Hay algo más en lo que pueda asistirte mientras tanto?"
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
+    # ========== TUTORIAL INTERACTIVO ==========
+
+    # Iniciar tutorial
+    if msg_lower in ["tutorial", "empezar tutorial", "iniciar tutorial", "ayuda para empezar"]:
+        if is_tutorial_complete(user_id):
+            response_msg = "Ya completaste el tutorial. 🎓\n\n¿Querés repetirlo? Escribí *reiniciar tutorial*\n\nO escribí *menú* para ver todas las funciones."
+        else:
+            response_msg = start_tutorial(user_id)
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
+    # Reiniciar tutorial
+    if msg_lower in ["reiniciar tutorial", "repetir tutorial"]:
+        response_msg = start_tutorial(user_id)
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
+    # Saltar/terminar tutorial
+    if msg_lower in ["saltar tutorial", "terminar tutorial", "omitir tutorial"]:
+        mark_tutorial_complete(user_id)
+        response_msg = "✅ Tutorial omitido. Escribí *menú* cuando quieras ver todas las funciones."
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
+    # Verificar progreso del tutorial
+    if not is_tutorial_complete(user_id) and get_tutorial_step(user_id) > 0:
+        tutorial_response = check_tutorial_trigger(user_id, user_message)
+        if tutorial_response:
+            add_to_conversation(user_id, "assistant", tutorial_response)
+            return tutorial_response
+
+    # ========== MODO NO MOLESTAR ==========
+
+    # Activar modo no molestar
+    dnd_match = re.search(r'(?:no molestar|modo nocturno|silencio)\s*(?:de\s*)?(\d{1,2})(?:[:\s]?(?:hs|hrs|horas|h))?\s*(?:a|hasta)\s*(\d{1,2})', msg_lower)
+    if dnd_match:
+        start_h = int(dnd_match.group(1))
+        end_h = int(dnd_match.group(2))
+        set_dnd(user_id, start_h, end_h)
+        response_msg = f"🌙 *Modo no molestar activado*\n\n⏰ De {start_h}:00 a {end_h}:00\n\nNo recibirás recordatorios ni alertas durante esas horas.\n\nPara desactivar: *desactivar no molestar*"
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
+    # Activar modo nocturno por defecto (22 a 8)
+    if msg_lower in ["activar modo nocturno", "activar no molestar", "modo nocturno"]:
+        set_dnd(user_id, 22, 8)
+        response_msg = "🌙 *Modo nocturno activado*\n\n⏰ De 22:00 a 08:00\n\nNo recibirás recordatorios ni alertas durante la noche.\n\nPara desactivar: *desactivar no molestar*"
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
+    # Desactivar modo no molestar
+    if msg_lower in ["desactivar no molestar", "desactivar modo nocturno", "quitar silencio"]:
+        disable_dnd(user_id)
+        response_msg = "☀️ *Modo no molestar desactivado*\n\nVolverás a recibir todos los recordatorios y alertas."
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
+    # Ver estado de no molestar
+    if msg_lower in ["estado no molestar", "ver modo nocturno", "horario silencio"]:
+        dnd_status = get_dnd_status(user_id)
+        if dnd_status and dnd_status.get("enabled"):
+            start_h = dnd_status.get("start_hour", 22)
+            end_h = dnd_status.get("end_hour", 8)
+            currently_active = "✅ Activo ahora" if is_dnd_active(user_id) else "⏸️ Inactivo ahora"
+            response_msg = f"🌙 *Modo no molestar*\n\n⏰ Horario: {start_h}:00 a {end_h}:00\n{currently_active}"
+        else:
+            response_msg = "☀️ El modo no molestar está desactivado.\n\nPara activarlo: *activar modo nocturno* o *no molestar de 22 a 8*"
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
+    # ========== VIDEOLLAMADA RÁPIDA ==========
+
+    # Llamar a contacto
+    call_match = re.search(r'(?:llamar a|videollamada con|video con|llamar)\s+(.+)', msg_lower)
+    if call_match:
+        contact_name = call_match.group(1).strip()
+
+        # Buscar en contactos
+        contact = find_contact(user_id, contact_name)
+        if contact:
+            phone = contact["phone"].replace("+", "").replace(" ", "").replace("-", "")
+            whatsapp_link = f"https://wa.me/{phone}?text=Hola!"
+            video_link = f"https://wa.me/{phone}"
+            response_msg = f"📞 *Llamar a {contact['name']}*\n\n"
+            response_msg += f"📱 WhatsApp: {whatsapp_link}\n\n"
+            response_msg += f"_Hacé clic en el link para abrir WhatsApp y llamar_"
+        else:
+            # Buscar si es el cuidador
+            if "cuidador" in contact_name:
+                caregiver = get_caregiver(user_id)
+                if caregiver:
+                    phone = caregiver.replace("whatsapp:", "").replace("+", "")
+                    caregiver_name = get_caregiver_name(user_id) or "tu cuidador"
+                    whatsapp_link = f"https://wa.me/{phone}"
+                    response_msg = f"📞 *Llamar a {caregiver_name}*\n\n📱 {whatsapp_link}\n\n_Hacé clic para abrir WhatsApp_"
+                else:
+                    response_msg = "⚠️ No tenés un cuidador configurado."
+            else:
+                response_msg = f"❌ No encontré a '{contact_name}' en tus contactos.\n\nPodés agregar contactos con:\n*guardar contacto: Nombre 123456789*"
         add_to_conversation(user_id, "assistant", response_msg)
         return response_msg
 
@@ -3537,6 +4029,8 @@ scheduler.add_job(lambda: send_medication_reminder("noche"), "cron", hour=21, mi
 scheduler.add_job(send_daily_medication_report, "cron", hour=22, minute=0)
 # Reporte semanal los domingos a las 20:00
 scheduler.add_job(send_weekly_reports, "cron", day_of_week="sun", hour=20, minute=0)
+# Resumen diario para cuidadores a las 21:00
+scheduler.add_job(send_daily_summaries, "cron", hour=21, minute=0)
 # Recordatorios de turnos médicos cada hora
 scheduler.add_job(check_appointment_reminders, "cron", minute=0)
 scheduler.start()
