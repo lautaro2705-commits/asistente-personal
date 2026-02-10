@@ -1734,6 +1734,619 @@ def get_dolar():
         print(f"Error obteniendo dólar: {e}")
         return "💵 No pude obtener la cotización del dólar."
 
+# ==================== REGISTRO DE SÍNTOMAS ====================
+
+SYMPTOMS_FILE = os.path.join(DATA_DIR, "symptoms.json")
+
+def load_symptoms():
+    """Carga el registro de síntomas"""
+    if os.path.exists(SYMPTOMS_FILE):
+        try:
+            with open(SYMPTOMS_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_symptoms(symptoms):
+    """Guarda el registro de síntomas"""
+    with open(SYMPTOMS_FILE, "w") as f:
+        json.dump(symptoms, f, ensure_ascii=False)
+
+def add_symptom(user_id, symptom, intensity=None, notes=None):
+    """Registra un síntoma"""
+    symptoms = load_symptoms()
+    if user_id not in symptoms:
+        symptoms[user_id] = []
+
+    entry = {
+        "id": len(symptoms[user_id]) + 1,
+        "symptom": symptom,
+        "intensity": intensity,  # 1-10
+        "notes": notes,
+        "date": datetime.now(TIMEZONE).strftime("%Y-%m-%d"),
+        "time": datetime.now(TIMEZONE).strftime("%H:%M"),
+        "timestamp": datetime.now(TIMEZONE).isoformat()
+    }
+    symptoms[user_id].append(entry)
+    save_symptoms(symptoms)
+    return entry
+
+def get_symptoms_history(user_id, days=7):
+    """Obtiene historial de síntomas de los últimos X días"""
+    symptoms = load_symptoms()
+    user_symptoms = symptoms.get(user_id, [])
+
+    cutoff = (datetime.now(TIMEZONE) - timedelta(days=days)).strftime("%Y-%m-%d")
+    return [s for s in user_symptoms if s.get("date", "") >= cutoff]
+
+def format_symptoms_report(user_id, days=30):
+    """Genera reporte de síntomas para el médico"""
+    symptoms = load_symptoms()
+    user_symptoms = symptoms.get(user_id, [])
+
+    if not user_symptoms:
+        return "📋 No hay síntomas registrados."
+
+    cutoff = (datetime.now(TIMEZONE) - timedelta(days=days)).strftime("%Y-%m-%d")
+    recent = [s for s in user_symptoms if s.get("date", "") >= cutoff]
+
+    if not recent:
+        return f"📋 No hay síntomas en los últimos {days} días."
+
+    report = f"📋 *Historial de Síntomas* (últimos {days} días)\n\n"
+
+    # Agrupar por síntoma
+    symptom_counts = {}
+    for s in recent:
+        name = s["symptom"]
+        if name not in symptom_counts:
+            symptom_counts[name] = []
+        symptom_counts[name].append(s)
+
+    for symptom, entries in symptom_counts.items():
+        report += f"*{symptom}:* {len(entries)} veces\n"
+        for e in entries[-3:]:  # Últimas 3 ocurrencias
+            intensity = f" (intensidad {e['intensity']}/10)" if e.get('intensity') else ""
+            report += f"  • {e['date']} {e['time']}{intensity}\n"
+        report += "\n"
+
+    return report
+
+# ==================== SIGNOS VITALES ====================
+
+VITALS_FILE = os.path.join(DATA_DIR, "vitals.json")
+
+def load_vitals():
+    """Carga registros de signos vitales"""
+    if os.path.exists(VITALS_FILE):
+        try:
+            with open(VITALS_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_vitals(vitals):
+    """Guarda registros de signos vitales"""
+    with open(VITALS_FILE, "w") as f:
+        json.dump(vitals, f, ensure_ascii=False)
+
+def add_vital(user_id, vital_type, value, value2=None):
+    """Registra un signo vital (presión, glucosa, etc.)"""
+    vitals = load_vitals()
+    if user_id not in vitals:
+        vitals[user_id] = []
+
+    entry = {
+        "id": len(vitals[user_id]) + 1,
+        "type": vital_type,
+        "value": value,
+        "value2": value2,  # Para presión (sistólica/diastólica)
+        "date": datetime.now(TIMEZONE).strftime("%Y-%m-%d"),
+        "time": datetime.now(TIMEZONE).strftime("%H:%M"),
+        "timestamp": datetime.now(TIMEZONE).isoformat()
+    }
+    vitals[user_id].append(entry)
+    save_vitals(vitals)
+    return entry
+
+def check_vital_alert(vital_type, value, value2=None):
+    """Verifica si un valor está fuera de rango normal"""
+    alerts = []
+
+    if vital_type == "presion":
+        sistolica = value
+        diastolica = value2 or 0
+        if sistolica > 140 or diastolica > 90:
+            alerts.append("⚠️ Presión ALTA")
+        elif sistolica < 90 or diastolica < 60:
+            alerts.append("⚠️ Presión BAJA")
+
+    elif vital_type == "glucosa":
+        if value > 180:
+            alerts.append("⚠️ Glucosa ALTA")
+        elif value < 70:
+            alerts.append("⚠️ Glucosa BAJA")
+
+    elif vital_type == "temperatura":
+        if value > 37.5:
+            alerts.append("⚠️ Fiebre")
+        elif value < 35.5:
+            alerts.append("⚠️ Temperatura BAJA")
+
+    elif vital_type == "oxigeno":
+        if value < 95:
+            alerts.append("⚠️ Oxígeno BAJO")
+
+    return alerts
+
+def get_vitals_history(user_id, vital_type=None, days=7):
+    """Obtiene historial de signos vitales"""
+    vitals = load_vitals()
+    user_vitals = vitals.get(user_id, [])
+
+    cutoff = (datetime.now(TIMEZONE) - timedelta(days=days)).strftime("%Y-%m-%d")
+    filtered = [v for v in user_vitals if v.get("date", "") >= cutoff]
+
+    if vital_type:
+        filtered = [v for v in filtered if v.get("type") == vital_type]
+
+    return filtered
+
+def format_vitals_report(user_id, days=30):
+    """Genera reporte de signos vitales"""
+    history = get_vitals_history(user_id, days=days)
+
+    if not history:
+        return "📊 No hay registros de signos vitales."
+
+    report = f"📊 *Signos Vitales* (últimos {days} días)\n\n"
+
+    # Agrupar por tipo
+    by_type = {}
+    for v in history:
+        vtype = v["type"]
+        if vtype not in by_type:
+            by_type[vtype] = []
+        by_type[vtype].append(v)
+
+    type_names = {
+        "presion": "🩺 Presión Arterial",
+        "glucosa": "🩸 Glucosa",
+        "temperatura": "🌡️ Temperatura",
+        "oxigeno": "💨 Oxígeno",
+        "peso": "⚖️ Peso"
+    }
+
+    for vtype, entries in by_type.items():
+        report += f"*{type_names.get(vtype, vtype)}:*\n"
+        for e in entries[-5:]:  # Últimos 5
+            if vtype == "presion":
+                report += f"  • {e['date']}: {e['value']}/{e.get('value2', '?')} mmHg\n"
+            elif vtype == "glucosa":
+                report += f"  • {e['date']}: {e['value']} mg/dL\n"
+            elif vtype == "temperatura":
+                report += f"  • {e['date']}: {e['value']}°C\n"
+            elif vtype == "oxigeno":
+                report += f"  • {e['date']}: {e['value']}%\n"
+            else:
+                report += f"  • {e['date']}: {e['value']}\n"
+        report += "\n"
+
+    return report
+
+# ==================== CONTADOR DE AGUA ====================
+
+WATER_FILE = os.path.join(DATA_DIR, "water_intake.json")
+
+def load_water_intake():
+    """Carga registro de consumo de agua"""
+    if os.path.exists(WATER_FILE):
+        try:
+            with open(WATER_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_water_intake(water):
+    """Guarda registro de consumo de agua"""
+    with open(WATER_FILE, "w") as f:
+        json.dump(water, f, ensure_ascii=False)
+
+def add_water(user_id, glasses=1):
+    """Registra vasos de agua"""
+    water = load_water_intake()
+    today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+
+    if user_id not in water:
+        water[user_id] = {}
+
+    if today not in water[user_id]:
+        water[user_id][today] = 0
+
+    water[user_id][today] += glasses
+    save_water_intake(water)
+    return water[user_id][today]
+
+def get_water_today(user_id):
+    """Obtiene vasos de agua de hoy"""
+    water = load_water_intake()
+    today = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
+    return water.get(user_id, {}).get(today, 0)
+
+def get_water_status(user_id, goal=8):
+    """Obtiene estado de hidratación"""
+    glasses = get_water_today(user_id)
+    remaining = max(0, goal - glasses)
+
+    if glasses >= goal:
+        return f"💧 ¡Excelente! Tomaste {glasses} vasos hoy. Meta cumplida ✅"
+    elif glasses >= goal * 0.75:
+        return f"💧 Vas muy bien: {glasses}/{goal} vasos. ¡Faltan solo {remaining}!"
+    elif glasses >= goal * 0.5:
+        return f"💧 Llevas {glasses}/{goal} vasos. Acordate de seguir tomando agua."
+    else:
+        return f"💧 Llevas {glasses}/{goal} vasos. ¡Te faltan {remaining} para la meta!"
+
+# ==================== RECORDATORIOS RECURRENTES ====================
+
+RECURRING_REMINDERS_FILE = os.path.join(DATA_DIR, "recurring_reminders.json")
+
+def load_recurring_reminders():
+    """Carga recordatorios recurrentes"""
+    if os.path.exists(RECURRING_REMINDERS_FILE):
+        try:
+            with open(RECURRING_REMINDERS_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_recurring_reminders(reminders):
+    """Guarda recordatorios recurrentes"""
+    with open(RECURRING_REMINDERS_FILE, "w") as f:
+        json.dump(reminders, f, ensure_ascii=False)
+
+def add_recurring_reminder(user_id, message, frequency, day_of_week=None, day_of_month=None, time_str="09:00"):
+    """Agrega recordatorio recurrente
+
+    frequency: 'daily', 'weekly', 'monthly'
+    day_of_week: 0=lunes, 6=domingo (para weekly)
+    day_of_month: 1-31 (para monthly)
+    """
+    reminders = load_recurring_reminders()
+    if user_id not in reminders:
+        reminders[user_id] = []
+
+    reminder = {
+        "id": len(reminders[user_id]) + 1,
+        "message": message,
+        "frequency": frequency,
+        "day_of_week": day_of_week,
+        "day_of_month": day_of_month,
+        "time": time_str,
+        "enabled": True,
+        "created_at": datetime.now(TIMEZONE).isoformat(),
+        "last_sent": None
+    }
+    reminders[user_id].append(reminder)
+    save_recurring_reminders(reminders)
+    return reminder
+
+def get_recurring_reminders(user_id):
+    """Obtiene recordatorios recurrentes de un usuario"""
+    reminders = load_recurring_reminders()
+    return reminders.get(user_id, [])
+
+def delete_recurring_reminder(user_id, reminder_id):
+    """Elimina un recordatorio recurrente"""
+    reminders = load_recurring_reminders()
+    if user_id in reminders:
+        original_len = len(reminders[user_id])
+        reminders[user_id] = [r for r in reminders[user_id] if r["id"] != reminder_id]
+        if len(reminders[user_id]) < original_len:
+            # Renumerar IDs
+            for i, r in enumerate(reminders[user_id]):
+                r["id"] = i + 1
+            save_recurring_reminders(reminders)
+            return True
+    return False
+
+def check_and_send_recurring_reminders():
+    """Verifica y envía recordatorios recurrentes"""
+    reminders = load_recurring_reminders()
+    now = datetime.now(TIMEZONE)
+    today = now.strftime("%Y-%m-%d")
+    current_time = now.strftime("%H:%M")
+    day_of_week = now.weekday()
+    day_of_month = now.day
+    updated = False
+
+    for user_id, user_reminders in reminders.items():
+        # Verificar modo no molestar
+        if is_dnd_active(user_id):
+            continue
+
+        for reminder in user_reminders:
+            if not reminder.get("enabled"):
+                continue
+
+            # Verificar si ya se envió hoy
+            if reminder.get("last_sent", "").startswith(today):
+                continue
+
+            # Verificar hora
+            if reminder.get("time", "09:00") > current_time:
+                continue
+
+            should_send = False
+
+            if reminder["frequency"] == "daily":
+                should_send = True
+            elif reminder["frequency"] == "weekly" and reminder.get("day_of_week") == day_of_week:
+                should_send = True
+            elif reminder["frequency"] == "monthly" and reminder.get("day_of_month") == day_of_month:
+                should_send = True
+
+            if should_send:
+                try:
+                    message = f"🔁 *Recordatorio:*\n\n{reminder['message']}"
+                    send_whatsapp_message(user_id, message, respect_dnd=True)
+                    reminder["last_sent"] = now.isoformat()
+                    updated = True
+                    print(f"Recordatorio recurrente enviado a {user_id}: {reminder['message']}")
+                except Exception as e:
+                    print(f"Error enviando recordatorio recurrente: {e}")
+
+    if updated:
+        save_recurring_reminders(reminders)
+
+def format_recurring_reminders_list(user_id):
+    """Formatea lista de recordatorios recurrentes"""
+    reminders = get_recurring_reminders(user_id)
+    active = [r for r in reminders if r.get("enabled")]
+
+    if not active:
+        return "🔁 No tenés recordatorios recurrentes.\n\nPodés crear uno con:\n*recordame todos los días/lunes/meses a las X que Y*"
+
+    freq_names = {
+        "daily": "Todos los días",
+        "weekly": "Semanal",
+        "monthly": "Mensual"
+    }
+    day_names = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+
+    result = "🔁 *Recordatorios Recurrentes:*\n\n"
+    for r in active:
+        freq = freq_names.get(r["frequency"], r["frequency"])
+        if r["frequency"] == "weekly":
+            day = day_names[r.get("day_of_week", 0)]
+            freq = f"Cada {day}"
+        elif r["frequency"] == "monthly":
+            freq = f"Día {r.get('day_of_month', 1)} de cada mes"
+
+        result += f"{r['id']}. {r['message']}\n"
+        result += f"   📅 {freq} a las {r.get('time', '09:00')}\n\n"
+
+    result += "_Para eliminar: eliminar recordatorio recurrente [número]_"
+    return result
+
+# ==================== CUMPLEAÑOS ====================
+
+BIRTHDAYS_FILE = os.path.join(DATA_DIR, "birthdays.json")
+
+def load_birthdays():
+    """Carga cumpleaños"""
+    if os.path.exists(BIRTHDAYS_FILE):
+        try:
+            with open(BIRTHDAYS_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_birthdays(birthdays):
+    """Guarda cumpleaños"""
+    with open(BIRTHDAYS_FILE, "w") as f:
+        json.dump(birthdays, f, ensure_ascii=False)
+
+def add_birthday(user_id, name, date_str, relation=None):
+    """Agrega un cumpleaños (formato DD/MM o DD/MM/YYYY)"""
+    birthdays = load_birthdays()
+    if user_id not in birthdays:
+        birthdays[user_id] = []
+
+    # Parsear fecha
+    parts = date_str.replace("-", "/").split("/")
+    day = int(parts[0])
+    month = int(parts[1])
+    year = int(parts[2]) if len(parts) > 2 else None
+
+    birthday = {
+        "id": len(birthdays[user_id]) + 1,
+        "name": name,
+        "day": day,
+        "month": month,
+        "year": year,
+        "relation": relation
+    }
+    birthdays[user_id].append(birthday)
+    save_birthdays(birthdays)
+    return birthday
+
+def get_upcoming_birthdays(user_id, days=30):
+    """Obtiene cumpleaños próximos"""
+    birthdays = load_birthdays()
+    user_birthdays = birthdays.get(user_id, [])
+
+    now = datetime.now(TIMEZONE)
+    upcoming = []
+
+    for b in user_birthdays:
+        # Crear fecha de este año
+        try:
+            this_year_bday = datetime(now.year, b["month"], b["day"])
+            if this_year_bday.date() < now.date():
+                # Ya pasó, usar próximo año
+                this_year_bday = datetime(now.year + 1, b["month"], b["day"])
+
+            days_until = (this_year_bday.date() - now.date()).days
+            if 0 <= days_until <= days:
+                upcoming.append({
+                    **b,
+                    "days_until": days_until,
+                    "next_date": this_year_bday.strftime("%d/%m")
+                })
+        except:
+            continue
+
+    return sorted(upcoming, key=lambda x: x["days_until"])
+
+def check_and_send_birthday_reminders():
+    """Envía recordatorios de cumpleaños (día anterior y mismo día)"""
+    birthdays = load_birthdays()
+    now = datetime.now(TIMEZONE)
+
+    for user_id, user_birthdays in birthdays.items():
+        if is_dnd_active(user_id):
+            continue
+
+        for b in user_birthdays:
+            try:
+                this_year_bday = datetime(now.year, b["month"], b["day"])
+                if this_year_bday.date() < now.date():
+                    this_year_bday = datetime(now.year + 1, b["month"], b["day"])
+
+                days_until = (this_year_bday.date() - now.date()).days
+                name = b["name"]
+                age = ""
+                if b.get("year"):
+                    age = f" (cumple {now.year - b['year']} años)"
+
+                if days_until == 1:
+                    # Mañana es el cumple
+                    message = f"🎂 *Recordatorio de cumpleaños*\n\n¡Mañana es el cumpleaños de *{name}*!{age}\n\n💡 Mensaje sugerido:\n_\"¡Feliz cumpleaños {name}! Que tengas un día hermoso lleno de alegría. Un abrazo grande!\"_"
+                    send_whatsapp_message(user_id, message, respect_dnd=True)
+                    print(f"Recordatorio de cumpleaños (mañana) enviado a {user_id}")
+
+                elif days_until == 0:
+                    # Hoy es el cumple
+                    message = f"🎉 *¡HOY es el cumpleaños de {name}!*{age}\n\n¡No te olvides de saludarlo/a!"
+                    send_whatsapp_message(user_id, message, respect_dnd=True)
+                    print(f"Recordatorio de cumpleaños (hoy) enviado a {user_id}")
+
+            except Exception as e:
+                print(f"Error procesando cumpleaños: {e}")
+
+def format_birthdays_list(user_id):
+    """Formatea lista de cumpleaños"""
+    birthdays = load_birthdays()
+    user_birthdays = birthdays.get(user_id, [])
+
+    if not user_birthdays:
+        return "🎂 No tenés cumpleaños guardados.\n\nAgregá uno con:\n*cumpleaños de Mamá: 15/03*"
+
+    upcoming = get_upcoming_birthdays(user_id, days=365)
+
+    result = "🎂 *Cumpleaños:*\n\n"
+    for b in upcoming[:10]:
+        age_info = ""
+        if b.get("year"):
+            now = datetime.now(TIMEZONE)
+            next_age = now.year - b["year"]
+            if b["days_until"] > 0:
+                next_age = now.year - b["year"]
+            age_info = f" ({next_age} años)"
+
+        if b["days_until"] == 0:
+            result += f"🎉 *{b['name']}* - ¡HOY!{age_info}\n"
+        elif b["days_until"] == 1:
+            result += f"📅 *{b['name']}* - Mañana{age_info}\n"
+        else:
+            result += f"📅 *{b['name']}* - {b['next_date']} (en {b['days_until']} días){age_info}\n"
+
+    return result
+
+# ==================== CONFIRMACIÓN DE LLEGADA ====================
+
+TRIP_STATUS_FILE = os.path.join(DATA_DIR, "trip_status.json")
+
+def load_trip_status():
+    """Carga estado de viajes/salidas"""
+    if os.path.exists(TRIP_STATUS_FILE):
+        try:
+            with open(TRIP_STATUS_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_trip_status(status):
+    """Guarda estado de viajes"""
+    with open(TRIP_STATUS_FILE, "w") as f:
+        json.dump(status, f, ensure_ascii=False)
+
+def start_trip(user_id, destination=None, expected_minutes=60):
+    """Marca que el usuario salió"""
+    status = load_trip_status()
+    now = datetime.now(TIMEZONE)
+
+    status[user_id] = {
+        "started_at": now.isoformat(),
+        "destination": destination,
+        "expected_return": (now + timedelta(minutes=expected_minutes)).isoformat(),
+        "confirmed_arrival": False
+    }
+    save_trip_status(status)
+    return status[user_id]
+
+def confirm_arrival(user_id):
+    """Confirma que llegó bien"""
+    status = load_trip_status()
+    if user_id in status:
+        status[user_id]["confirmed_arrival"] = True
+        status[user_id]["arrived_at"] = datetime.now(TIMEZONE).isoformat()
+        save_trip_status(status)
+        return True
+    return False
+
+def check_pending_arrivals():
+    """Verifica si hay usuarios que no confirmaron llegada"""
+    status = load_trip_status()
+    now = datetime.now(TIMEZONE)
+
+    for user_id, trip in status.items():
+        if trip.get("confirmed_arrival"):
+            continue
+
+        expected = datetime.fromisoformat(trip["expected_return"])
+        if now > expected + timedelta(minutes=15):  # 15 min de gracia
+            # Enviar recordatorio al usuario
+            try:
+                message = "🏠 ¿Llegaste bien?\n\nEscribí *llegué* para confirmar."
+                send_whatsapp_message(user_id, message)
+                print(f"Recordatorio de llegada enviado a {user_id}")
+            except Exception as e:
+                print(f"Error enviando recordatorio de llegada: {e}")
+
+        if now > expected + timedelta(minutes=45):  # 45 min sin confirmar
+            # Alertar al cuidador
+            caregiver = get_caregiver(user_id)
+            if caregiver and not trip.get("caregiver_alerted"):
+                destination = trip.get("destination", "desconocido")
+                user_display = user_id.replace("whatsapp:", "")
+                alert = f"⚠️ *Alerta de llegada*\n\n{user_display} salió hace más de 45 minutos y no confirmó llegada.\n\nDestino: {destination}\n\n_Verificá que esté bien_"
+
+                try:
+                    send_whatsapp_message(caregiver, alert)
+                    trip["caregiver_alerted"] = True
+                    save_trip_status(status)
+                    print(f"Alerta de llegada enviada al cuidador de {user_id}")
+                except Exception as e:
+                    print(f"Error enviando alerta de llegada: {e}")
+
 # ==================== GASTOS ====================
 
 EXPENSES_FILE = os.path.join(DATA_DIR, "expenses.json")
@@ -3662,6 +4275,243 @@ def get_ai_response(user_message, user_id):
         add_to_conversation(user_id, "assistant", response_msg)
         return response_msg
 
+    # ========== REGISTRO DE SÍNTOMAS ==========
+
+    # Registrar síntoma: "me duele la cabeza", "tengo dolor de espalda"
+    symptom_match = re.search(r'(?:me duele|tengo dolor de?|siento|tengo)\s+(?:el |la |los |las )?(.+?)(?:\s+(?:intensidad|nivel)\s*(\d+))?$', msg_lower)
+    if symptom_match and any(word in msg_lower for word in ["duele", "dolor", "mareo", "náusea", "nausea", "fiebre", "cansancio", "fatiga", "malestar"]):
+        symptom = symptom_match.group(1).strip()
+        intensity = int(symptom_match.group(2)) if symptom_match.group(2) else None
+
+        add_symptom(user_id, symptom, intensity)
+        response_msg = f"📋 Registré: *{symptom}*"
+        if intensity:
+            response_msg += f" (intensidad {intensity}/10)"
+        response_msg += f"\n\n_Escribí 'mis síntomas' para ver el historial_"
+
+        # Alertar al cuidador si es algo preocupante
+        worry_words = ["pecho", "corazón", "corazon", "respirar", "desmayo", "caí", "caer"]
+        if any(w in symptom for w in worry_words):
+            caregiver = get_caregiver(user_id)
+            if caregiver:
+                alert = f"⚠️ *Alerta de síntoma*\n\n{user_id.replace('whatsapp:', '')} reportó: {symptom}"
+                send_whatsapp_message(caregiver, alert)
+                response_msg += "\n\n⚠️ _Se notificó a tu cuidador por precaución_"
+
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
+    # Ver historial de síntomas
+    if msg_lower in ["mis síntomas", "mis sintomas", "historial síntomas", "historial de síntomas", "síntomas"]:
+        response_msg = format_symptoms_report(user_id)
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
+    # ========== SIGNOS VITALES ==========
+
+    # Registrar presión: "presión 12/8" o "mi presión es 120/80"
+    pressure_match = re.search(r'(?:presión|presion|mi presión|tengo)\s*(?:es|de)?\s*(\d{2,3})[/\s](\d{2,3})', msg_lower)
+    if pressure_match:
+        sistolica = int(pressure_match.group(1))
+        diastolica = int(pressure_match.group(2))
+
+        # Normalizar si dieron valores bajos (ej: 12/8 en vez de 120/80)
+        if sistolica < 30:
+            sistolica *= 10
+            diastolica *= 10
+
+        entry = add_vital(user_id, "presion", sistolica, diastolica)
+        alerts = check_vital_alert("presion", sistolica, diastolica)
+
+        response_msg = f"🩺 Presión registrada: *{sistolica}/{diastolica} mmHg*"
+        if alerts:
+            response_msg += f"\n\n{' '.join(alerts)}\n_Consultá con tu médico_"
+            # Alertar al cuidador
+            caregiver = get_caregiver(user_id)
+            if caregiver:
+                alert = f"⚠️ *Alerta de presión*\n\n{user_id.replace('whatsapp:', '')}: {sistolica}/{diastolica} mmHg\n{' '.join(alerts)}"
+                send_whatsapp_message(caregiver, alert)
+
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
+    # Registrar glucosa: "glucosa 110" o "azúcar 95"
+    glucose_match = re.search(r'(?:glucosa|glucemia|azúcar|azucar)\s*(?:es|de|en)?\s*(\d{2,3})', msg_lower)
+    if glucose_match:
+        value = int(glucose_match.group(1))
+        entry = add_vital(user_id, "glucosa", value)
+        alerts = check_vital_alert("glucosa", value)
+
+        response_msg = f"🩸 Glucosa registrada: *{value} mg/dL*"
+        if alerts:
+            response_msg += f"\n\n{' '.join(alerts)}\n_Consultá con tu médico_"
+            caregiver = get_caregiver(user_id)
+            if caregiver:
+                alert = f"⚠️ *Alerta de glucosa*\n\n{user_id.replace('whatsapp:', '')}: {value} mg/dL\n{' '.join(alerts)}"
+                send_whatsapp_message(caregiver, alert)
+
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
+    # Registrar temperatura: "temperatura 37.5" o "tengo 38 de fiebre"
+    temp_match = re.search(r'(?:temperatura|fiebre|tengo)\s*(?:de)?\s*(\d{2}(?:[.,]\d)?)\s*(?:grados|°|de fiebre)?', msg_lower)
+    if temp_match:
+        value = float(temp_match.group(1).replace(",", "."))
+        entry = add_vital(user_id, "temperatura", value)
+        alerts = check_vital_alert("temperatura", value)
+
+        response_msg = f"🌡️ Temperatura registrada: *{value}°C*"
+        if alerts:
+            response_msg += f"\n\n{' '.join(alerts)}"
+            caregiver = get_caregiver(user_id)
+            if caregiver:
+                alert = f"⚠️ *Alerta de temperatura*\n\n{user_id.replace('whatsapp:', '')}: {value}°C\n{' '.join(alerts)}"
+                send_whatsapp_message(caregiver, alert)
+
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
+    # Registrar oxígeno: "oxígeno 96" o "saturación 95"
+    oxygen_match = re.search(r'(?:oxígeno|oxigeno|saturación|saturacion|spo2)\s*(?:es|de|en)?\s*(\d{2,3})\s*%?', msg_lower)
+    if oxygen_match:
+        value = int(oxygen_match.group(1))
+        entry = add_vital(user_id, "oxigeno", value)
+        alerts = check_vital_alert("oxigeno", value)
+
+        response_msg = f"💨 Oxígeno registrado: *{value}%*"
+        if alerts:
+            response_msg += f"\n\n{' '.join(alerts)}\n_¡Consultá urgente!_"
+            caregiver = get_caregiver(user_id)
+            if caregiver:
+                alert = f"🚨 *ALERTA OXÍGENO BAJO*\n\n{user_id.replace('whatsapp:', '')}: {value}%\n\n¡Requiere atención urgente!"
+                send_whatsapp_message(caregiver, alert, is_emergency=True)
+
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
+    # Ver historial de signos vitales
+    if msg_lower in ["mis signos", "signos vitales", "mis signos vitales", "historial signos", "ver presión", "ver glucosa"]:
+        response_msg = format_vitals_report(user_id)
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
+    # ========== CONTADOR DE AGUA ==========
+
+    # Registrar agua: "tomé agua", "tomé un vaso", "tomé 2 vasos"
+    water_match = re.search(r'(?:tomé|tome|bebí|bebi)\s*(?:un\s*)?(?:vaso|vasos|agua)?\s*(?:de\s*)?(?:agua)?\s*(\d+)?', msg_lower)
+    if water_match and any(word in msg_lower for word in ["agua", "vaso", "vasos", "hidrat"]):
+        glasses = int(water_match.group(1)) if water_match.group(1) else 1
+        total = add_water(user_id, glasses)
+        response_msg = get_water_status(user_id)
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
+    # Ver estado de hidratación
+    if msg_lower in ["cuánta agua", "cuanta agua", "vasos de agua", "mi agua", "hidratación", "hidratacion"]:
+        response_msg = get_water_status(user_id)
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
+    # ========== RECORDATORIOS RECURRENTES ==========
+
+    # Crear recordatorio diario: "recordame todos los días a las 10 tomar la pastilla"
+    daily_reminder_match = re.search(r'(?:recordame|avisame)\s+todos\s+los\s+días?\s+(?:a\s+las?\s+)?(\d{1,2})(?::(\d{2}))?\s+(?:que\s+)?(.+)', msg_lower)
+    if daily_reminder_match:
+        hour = int(daily_reminder_match.group(1))
+        minute = daily_reminder_match.group(2) or "00"
+        message = daily_reminder_match.group(3).strip()
+        time_str = f"{hour:02d}:{minute}"
+
+        add_recurring_reminder(user_id, message, "daily", time_str=time_str)
+        response_msg = f"🔁 *Recordatorio diario creado*\n\n📝 {message}\n⏰ Todos los días a las {time_str}"
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
+    # Crear recordatorio semanal: "recordame todos los lunes a las 9 ir al médico"
+    days_map = {"lunes": 0, "martes": 1, "miércoles": 2, "miercoles": 2, "jueves": 3, "viernes": 4, "sábado": 5, "sabado": 5, "domingo": 6}
+    weekly_reminder_match = re.search(r'(?:recordame|avisame)\s+todos\s+los\s+(lunes|martes|miércoles|miercoles|jueves|viernes|sábado|sabado|domingo)\s+(?:a\s+las?\s+)?(\d{1,2})(?::(\d{2}))?\s+(?:que\s+)?(.+)', msg_lower)
+    if weekly_reminder_match:
+        day_name = weekly_reminder_match.group(1)
+        day_num = days_map.get(day_name, 0)
+        hour = int(weekly_reminder_match.group(2))
+        minute = weekly_reminder_match.group(3) or "00"
+        message = weekly_reminder_match.group(4).strip()
+        time_str = f"{hour:02d}:{minute}"
+
+        add_recurring_reminder(user_id, message, "weekly", day_of_week=day_num, time_str=time_str)
+        response_msg = f"🔁 *Recordatorio semanal creado*\n\n📝 {message}\n📅 Todos los {day_name} a las {time_str}"
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
+    # Ver recordatorios recurrentes
+    if msg_lower in ["mis recordatorios recurrentes", "recordatorios recurrentes", "recordatorios repetidos"]:
+        response_msg = format_recurring_reminders_list(user_id)
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
+    # Eliminar recordatorio recurrente
+    delete_recurring_match = re.search(r'(?:eliminar|borrar|quitar)\s+recordatorio\s+recurrente\s+(\d+)', msg_lower)
+    if delete_recurring_match:
+        reminder_id = int(delete_recurring_match.group(1))
+        if delete_recurring_reminder(user_id, reminder_id):
+            response_msg = f"✅ Recordatorio recurrente #{reminder_id} eliminado."
+        else:
+            response_msg = "❌ No encontré ese recordatorio."
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
+    # ========== CUMPLEAÑOS ==========
+
+    # Agregar cumpleaños: "cumpleaños de Mamá: 15/03" o "el cumple de Juan es el 20/5/1985"
+    birthday_match = re.search(r'(?:cumpleaños|cumple)\s+(?:de\s+)?([^:]+?)[\s:]+(?:es\s+(?:el\s+)?)?(\d{1,2})[/\-](\d{1,2})(?:[/\-](\d{2,4}))?', msg_lower)
+    if birthday_match:
+        name = birthday_match.group(1).strip().title()
+        day = birthday_match.group(2)
+        month = birthday_match.group(3)
+        year = birthday_match.group(4)
+
+        date_str = f"{day}/{month}"
+        if year:
+            date_str += f"/{year}"
+
+        add_birthday(user_id, name, date_str)
+        response_msg = f"🎂 Cumpleaños guardado:\n\n👤 *{name}*\n📅 {day}/{month}"
+        if year:
+            response_msg += f"/{year}"
+        response_msg += "\n\n_Te avisaré el día anterior y el mismo día_"
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
+    # Ver cumpleaños
+    if msg_lower in ["cumpleaños", "cumples", "mis cumpleaños", "próximos cumpleaños", "proximos cumpleaños"]:
+        response_msg = format_birthdays_list(user_id)
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
+    # ========== CONFIRMACIÓN DE LLEGADA ==========
+
+    # Marcar salida: "voy a salir", "salgo a caminar", "voy al médico"
+    trip_match = re.search(r'(?:voy a salir|salgo|voy al?|me voy)\s*(?:a\s+)?(.+)?', msg_lower)
+    if trip_match and any(word in msg_lower for word in ["salir", "salgo", "voy a", "me voy"]):
+        destination = trip_match.group(1).strip() if trip_match.group(1) else "salida"
+        start_trip(user_id, destination)
+        response_msg = f"🚶 ¡Buen paseo!\n\nDestino: *{destination}*\n\n_Cuando llegues, escribí *llegué* para que sepa que estás bien._"
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
+    # Confirmar llegada: "llegué", "ya llegué", "llegué bien"
+    if msg_lower in ["llegué", "llegue", "ya llegué", "ya llegue", "llegué bien", "llegue bien"]:
+        if confirm_arrival(user_id):
+            response_msg = "🏠 ¡Qué bueno que llegaste bien! 😊"
+            # Notificar al cuidador
+            caregiver = get_caregiver(user_id)
+            if caregiver:
+                send_whatsapp_message(caregiver, f"✅ {user_id.replace('whatsapp:', '')} llegó bien a destino.")
+        else:
+            response_msg = "🏠 ¡Qué bueno!"
+        add_to_conversation(user_id, "assistant", response_msg)
+        return response_msg
+
     # ========== COMANDOS PARA CUIDADORES ==========
 
     # Ver usuarios asignados (para cuidadores)
@@ -4033,6 +4883,12 @@ scheduler.add_job(send_weekly_reports, "cron", day_of_week="sun", hour=20, minut
 scheduler.add_job(send_daily_summaries, "cron", hour=21, minute=0)
 # Recordatorios de turnos médicos cada hora
 scheduler.add_job(check_appointment_reminders, "cron", minute=0)
+# Recordatorios recurrentes cada minuto
+scheduler.add_job(check_and_send_recurring_reminders, "interval", minutes=1)
+# Verificar cumpleaños cada día a las 8:30 AM
+scheduler.add_job(check_and_send_birthday_reminders, "cron", hour=8, minute=30)
+# Verificar llegadas pendientes cada 5 minutos
+scheduler.add_job(check_pending_arrivals, "interval", minutes=5)
 scheduler.start()
 
 if __name__ == "__main__":
